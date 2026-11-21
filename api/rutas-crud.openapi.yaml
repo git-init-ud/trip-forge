@@ -1,0 +1,26 @@
+openapi: 3.0.3
+info:
+  title: Súbete · rutas-crud
+  version: 0.1.0
+servers:
+  - url: http://127.0.0.1:8081
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Comprueba que el proceso HTTP responde
+      responses:
+        '200':
+          description: Servicio activo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                  service:
+                    type: string
+                    enum: [rutas-crud]
