@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Documento · Trip Forge</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <strong id="encabezado">Trip Forge · Documento</strong>
+    <nav>
+      <a href="index.html">Inicio</a>
+      <a href="swagger.html?spec=api/rutas-crud.openapi.yaml">CRUD</a>
+      <a href="swagger.html?spec=api/rutas-mid.openapi.yaml">MID</a>
+    </nav>
+  </header>
+
+  <main class="contenido">
+    <article id="contenido">
+      <p>Cargando documento…</p>
+    </article>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    const documentos = {
+      "md/README.md": "README",
+      "md/PROPUESTA-GRUPO-A.md": "Propuesta del grupo A",
+      "md/AGENTS.md": "Convenciones de desarrollo",
+      "md/X1.cluster-subete.md": "Requisitos del clúster",
+    };
+    const enlacesDocumentos = {
+      "README.md": "md/README.md",
+      "PROPUESTA-GRUPO-A.md": "md/PROPUESTA-GRUPO-A.md",
+      "AGENTS.md": "md/AGENTS.md",
+      "X1.cluster-subete.md": "md/X1.cluster-subete.md",
+    };
+
+    const parametros = new URLSearchParams(window.location.search);
+    const solicitado = parametros.get("file");
+    const archivo = documentos[solicitado] ? solicitado : "md/README.md";
+    const titulo = documentos[archivo];
+    document.title = titulo + " · Trip Forge";
+    document.getElementById("encabezado").textContent = "Trip Forge · " + titulo;
+
+    function reescribirEnlaces(contenedor) {
+      contenedor.querySelectorAll("a[href]").forEach((enlace) => {
+        const original = enlace.getAttribute("href");
+        if (!original || original.startsWith("http") || original.startsWith("#") || original.startsWith("mailto:")) {
+          return;
+        }
+        const limpio = original.replace(/^\.\//, "");
+        if (enlacesDocumentos[limpio]) {
+          enlace.setAttribute("href", "markdown.html?file=" + encodeURIComponent(enlacesDocumentos[limpio]));
+          return;
+        }
+        if (limpio === "api/rutas-crud.openapi.yaml" || limpio === "api/rutas-mid.openapi.yaml") {
+          enlace.setAttribute("href", "swagger.html?spec=" + encodeURIComponent(limpio));
+        }
+      });
+    }
+
+    fetch(archivo)
+      .then((respuesta) => {
+        if (!respuesta.ok) {
+          throw new Error("No se pudo cargar " + archivo + " (" + respuesta.status + ")");
+        }
+        return respuesta.text();
+      })
+      .then((texto) => {
+        const articulo = document.getElementById("contenido");
+        articulo.innerHTML = marked.parse(texto);
+        reescribirEnlaces(articulo);
+      })
+      .catch((error) => {
+        document.getElementById("contenido").innerHTML =
+          "<h1>No se pudo cargar el documento</h1><p>" + error.message + "</p>";
+      });
+  </script>
+</body>
+</html>

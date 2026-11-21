@@ -17,12 +17,13 @@ docker compose exec -T mongo mongosh --quiet --eval "db.adminCommand({ping:1})"
 
 MongoDB escucha en `127.0.0.1:27017` y conserva los datos en un volumen local. Para cambiar el puerto, copia `.env.example` a `.env` y ajusta `MONGO_PORT` antes de iniciar Compose. Usa `docker compose stop` para detenerlo.
 
-Abre la carpeta que contiene `go.mod` en GoLand y selecciona el SDK instalado en *Settings → Go → GOROOT*. En el selector de ejecución inicia **rutas-crud** y **rutas-mid**. **Pruebas** ejecuta las pruebas del módulo. Desde una terminal por servicio puedes usar los mismos puntos de entrada:
+Abre la carpeta que contiene `go.mod` en GoLand y selecciona el SDK instalado en *Settings → Go → GOROOT*. En el selector de ejecución inicia **rutas-crud**, **rutas-mid** y **docs**. **Pruebas** ejecuta las pruebas del módulo. Desde una terminal por servicio puedes usar los mismos puntos de entrada:
 
 | Servicio | Comando | Comprobación en PowerShell |
 | --- | --- | --- |
 | CRUD | `go run ./cmd/rutas-crud` | `Invoke-RestMethod http://127.0.0.1:8081/health` |
 | MID | `go run ./cmd/rutas-mid` | `Invoke-RestMethod http://127.0.0.1:8082/health` |
+| Docs | `go run ./cmd/docs` | `Invoke-RestMethod http://127.0.0.1:8090/health` |
 
 Cada respuesta contiene `status: ok` y el nombre del proceso. Este chequeo mide disponibilidad HTTP. Para cambiar la dirección de un proceso, define `HTTP_ADDR` en su configuración de ejecución.
 
@@ -54,6 +55,14 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8081/rutas -ContentType 'applica
 Los cupos se ajustan con `Invoke-RestMethod -Method Patch http://127.0.0.1:8081/rutas/<id>/cupos -ContentType 'application/json' -Body '{"delta":-1}'`. El cambio de disponibilidad y estado ocurre en una sola escritura condicional: dos solicitudes simultáneas por el último cupo producen una respuesta 200 y otra 409. Los errores usan `{ "codigo", "mensaje", "detalle" }`.
 
 Variables leídas por el CRUD: `HTTP_ADDR`, `MONGODB_URI` y `MONGODB_DB`. `MONGODB_TEST_URI` habilita las pruebas de integración; si queda vacío, se omiten. Copia `.env.example` como referencia.
+
+## Documentación en el navegador
+
+```powershell
+go run ./cmd/docs
+```
+
+Abre `http://127.0.0.1:8090`. El visor reúne los dos contratos OpenAPI con Swagger UI y los documentos del repositorio con enlaces entre ellos. Los YAML también quedan como archivos en `/api/` y los Markdown en `/md/`. Cambia la dirección con `HTTP_ADDR` y la raíz con `DOCS_ROOT`. Swagger UI y el renderizador de Markdown se cargan desde CDN; si no hay internet, los archivos crudos siguen disponibles.
 
 ## Verificación
 

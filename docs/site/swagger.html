@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Referencia OpenAPI · Trip Forge</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { background: #f6f2ea; }
+    .swagger-ui .topbar { display: none; }
+    .swagger-ui .info { margin: 1.5rem 0; }
+    .swagger-ui .info .title { font-family: Georgia, "Times New Roman", serif; font-weight: 500; }
+    .swagger-ui .scheme-container { background: transparent; box-shadow: none; }
+    .swagger-ui .opblock-tag { font-family: Georgia, "Times New Roman", serif; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <strong>Trip Forge · Referencia</strong>
+    <nav>
+      <a href="index.html">Inicio</a>
+      <a href="swagger.html?spec=api/rutas-crud.openapi.yaml">CRUD</a>
+      <a href="swagger.html?spec=api/rutas-mid.openapi.yaml">MID</a>
+      <a href="markdown.html?file=md/PROPUESTA-GRUPO-A.md">Propuesta</a>
+    </nav>
+  </header>
+
+  <p class="aviso">
+    Referencia de solo lectura. Para probar las operaciones usa PowerShell o curl
+    contra <code>http://127.0.0.1:8081</code> y <code>http://127.0.0.1:8082</code>.
+  </p>
+
+  <main class="swagger-wrap">
+    <div id="swagger-ui"></div>
+  </main>
+
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    const permitidos = [
+      "api/rutas-crud.openapi.yaml",
+      "api/rutas-mid.openapi.yaml"
+    ];
+    const parametros = new URLSearchParams(window.location.search);
+    const solicitado = parametros.get("spec");
+    const especificacion = permitidos.includes(solicitado) ? solicitado : permitidos[0];
+    const titulos = {
+      "api/rutas-crud.openapi.yaml": "CRUD de rutas",
+      "api/rutas-mid.openapi.yaml": "MID de rutas"
+    };
+    document.title = (titulos[especificacion] || "Referencia") + " · Trip Forge";
+    document.querySelector(".topbar strong").textContent = "Trip Forge · " + (titulos[especificacion] || "Referencia");
+
+    window.ui = SwaggerUIBundle({
+      url: especificacion,
+      dom_id: "#swagger-ui",
+      deepLinking: true,
+      displayRequestDuration: true,
+      docExpansion: "list",
+      defaultModelsExpandDepth: 1,
+      supportedSubmitMethods: [],
+      presets: [SwaggerUIBundle.presets.apis],
+      layout: "BaseLayout"
+    });
+  </script>
+</body>
+</html>

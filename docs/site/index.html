@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Documentación de Trip Forge, las APIs de rutas y conductores del grupo A de Súbete.">
+  <title>Trip Forge · Documentación</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="hero">
+    <p class="eyebrow">Súbete · Grupo A</p>
+    <h1>Trip Forge</h1>
+    <p class="lede">
+      Rutas y conductores: contratos, decisiones y guías para publicar una ruta,
+      consultarla y ajustar cupos sin vender de más.
+    </p>
+  </header>
+
+  <main>
+    <section aria-labelledby="contratos">
+      <h2 id="contratos">Contratos</h2>
+      <div class="grid">
+        <a class="card" href="swagger.html?spec=api/rutas-crud.openapi.yaml">
+          <span class="tag">OpenAPI</span>
+          <h3>CRUD de rutas</h3>
+          <p>Publicar, consultar y descontar cupos. Validaciones, errores y ejemplos del hito 1.</p>
+          <span class="go">Abrir referencia →</span>
+        </a>
+        <a class="card" href="swagger.html?spec=api/rutas-mid.openapi.yaml">
+          <span class="tag">OpenAPI</span>
+          <h3>MID de rutas</h3>
+          <p>Contrato de búsqueda de rutas compatibles y panel del conductor.</p>
+          <span class="go">Abrir referencia →</span>
+        </a>
+      </div>
+    </section>
+
+    <section aria-labelledby="documentos">
+      <h2 id="documentos">Documentos</h2>
+      <div class="grid">
+        <a class="card" href="markdown.html?file=md/PROPUESTA-GRUPO-A.md">
+          <span class="tag">Propuesta</span>
+          <h3>Decisiones del grupo A</h3>
+          <p>Stack, secuencias, persistencia, reglas de cupos y reparto de trabajo.</p>
+          <span class="go">Leer propuesta →</span>
+        </a>
+        <a class="card" href="markdown.html?file=md/X1.cluster-subete.md">
+          <span class="tag">Clúster</span>
+          <h3>Requisitos de Súbete</h3>
+          <p>Historias, criterios de aceptación, alcances y guion de la demostración.</p>
+          <span class="go">Leer requisitos →</span>
+        </a>
+        <a class="card" href="markdown.html?file=md/AGENTS.md">
+          <span class="tag">Equipo</span>
+          <h3>Convenciones de desarrollo</h3>
+          <p>Propiedad de datos, manejo de errores, pruebas y trabajo entre agentes.</p>
+          <span class="go">Leer convenciones →</span>
+        </a>
+        <a class="card" href="markdown.html?file=md/README.md">
+          <span class="tag">Guía</span>
+          <h3>Arranque y verificación</h3>
+          <p>Cómo levantar MongoDB, las APIs, el visor y ejecutar las pruebas.</p>
+          <span class="go">Leer README →</span>
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Servido con <code>go run ./cmd/docs</code> en <code>http://127.0.0.1:8090</code>.
+    Los contratos también están disponibles como YAML en <code>/api/</code>.
+  </footer>
+</body>
+</html>
