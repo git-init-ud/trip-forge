@@ -1,13 +1,27 @@
 openapi: 3.0.3
 info:
   title: Súbete · rutas-crud
-  version: 0.1.0
+  version: 0.2.0
+  description: |
+    CRUD de rutas del grupo A. Es el único dueño de MongoDB.
+
+    Hito 1: publicar una ruta, consultarla y descontar o devolver cupos de
+    forma atómica. Los puntos geográficos usan el orden de GeoJSON
+    `[longitud, latitud]` y las fechas de salida se guardan y devuelven en UTC.
+
+    Pendiente con el gateway: nombre de la cabecera de confianza, identidad del
+    conductor y scopes. Mientras no exista ese acuerdo, `conductorId` viaja en el
+    cuerpo de `POST /rutas` y la API no aplica autorización de propietario.
 servers:
   - url: http://127.0.0.1:8081
+tags:
+  - name: salud
+  - name: rutas
 paths:
   /health:
     get:
       operationId: health
+      tags: [salud]
       summary: Comprueba que el proceso HTTP responde
       responses:
         '200':
@@ -24,3 +38,371 @@ paths:
                   service:
                     type: string
                     enum: [rutas-crud]
+  /rutas:
+    post:
+      operationId: crearRuta
+      tags: [rutas]
+      summary: Publica una ruta con su trazado
+      description: |
+        Crea la ruta en estado `abierta` con `cuposDisponibles` igual a
+        `cuposTotales`. El identificador, la disponibilidad inicial y el estado
+        los asigna el servidor.
+
+        Rechaza `cuposTotales` fuera de 1 a 6, `precioTotal` negativo, `salida`
+        que no sea futura, coordenadas fuera de rango y trazados con menos de
+        dos puntos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CrearRuta'
+            example:
+              conductorId: usr-12
+              origen:
+                nombre: Chapinero
+                punto:
+                  type: Point
+                  coordinates: [-74.0645, 4.6486]
+              destino:
+                nombre: Universidad
+                punto:
+                  type: Point
+                  coordinates: [-74.0415, 4.7012]
+              trazado:
+                type: LineString
+                coordinates:
+                  - [-74.0645, 4.6486]
+                  - [-74.0600, 4.6650]
+                  - [-74.0415, 4.7012]
+              salida: '2026-11-21T06:30:00Z'
+              cuposTotales: 3
+              precioTotal: 12000
+      responses:
+        '201':
+          description: Ruta creada
+          headers:
+            Location:
+              description: URI del recurso creado
+              schema:
+                type: string
+                example: /rutas/ruta-1a2b3c4d5e6f7a8b
+            X-Request-Id:
+              description: Identificador de la solicitud, propio o generado por el servidor
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ruta'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '500':
+          $ref: '#/components/responses/ErrorInterno'
+  /rutas/{id}:
+    parameters:
+      - $ref: '#/components/parameters/RutaId'
+    get:
+      operationId: obtenerRuta
+      tags: [rutas]
+      summary: Consulta el detalle de una ruta
+      responses:
+        '200':
+          description: Ruta encontrada
+          headers:
+            X-Request-Id:
+              description: Identificador de la solicitud, propio o generado por el servidor
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ruta'
+        '404':
+          $ref: '#/components/responses/NoEncontrada'
+        '500':
+          $ref: '#/components/responses/ErrorInterno'
+  /rutas/{id}/cupos:
+    parameters:
+      - $ref: '#/components/parameters/RutaId'
+    patch:
+      operationId: ajustarCupos
+      tags: [rutas]
+      summary: Descuenta o devuelve cupos de una ruta
+      description: |
+        Aplica `delta` en una sola escritura condicional del documento. Con
+        valores negativos exige que la ruta esté `abierta` y que haya cupos
+        suficientes. Con valores positivos acepta rutas `abiertas` o `llenas` y
+        no permite superar `cuposTotales`.
+
+        La disponibilidad y el estado cambian juntos: al llegar a cero la ruta
+        pasa a `llena` y al devolver un cupo vuelve a `abierta`. Dos solicitudes
+        simultáneas por el último cupo producen un `200` y un `409 sin_cupos`.
+
+        Es la operación que consume el MID de Reservas con el scope
+        `rutas:escribir`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AjusteCupos'
+            example:
+              delta: -1
+      responses:
+        '200':
+          description: Ruta con la disponibilidad y el estado actualizados
+          headers:
+            X-Request-Id:
+              description: Identificador de la solicitud, propio o generado por el servidor
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ruta'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '404':
+          $ref: '#/components/responses/NoEncontrada'
+        '409':
+          description: |
+            El ajuste no cumple una condición de inventario. Códigos:
+            `sin_cupos` cuando un descuento no encuentra disponibilidad
+            (incluido un descuento sobre una ruta cerrada), `cupos_excedidos`
+            cuando una devolución supera el total y `ruta_cerrada` cuando se
+            intenta devolver cupos a una ruta cerrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                sinCupos:
+                  value:
+                    codigo: sin_cupos
+                    mensaje: La ruta no tiene cupos disponibles
+                    detalle:
+                      rutaId: ruta-1a2b3c4d5e6f7a8b
+        '500':
+          $ref: '#/components/responses/ErrorInterno'
+components:
+  parameters:
+    RutaId:
+      name: id
+      in: path
+      required: true
+      description: Identificador de la ruta
+      schema:
+        type: string
+        pattern: '^ruta-[a-z0-9]+$'
+        example: ruta-1a2b3c4d5e6f7a8b
+  responses:
+    SolicitudInvalida:
+      description: Cuerpo o campos inválidos
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: solicitud_invalida
+            mensaje: 'cuposTotales debe estar entre 1 y 6'
+            detalle:
+              campo: cuposTotales
+    NoEncontrada:
+      description: La ruta no existe
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: no_encontrada
+            mensaje: La ruta no existe
+            detalle:
+              rutaId: ruta-1a2b3c4d5e6f7a8b
+    ErrorInterno:
+      description: Fallo inesperado del servidor
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: error_interno
+            mensaje: No fue posible completar la solicitud
+            detalle: {}
+  schemas:
+    Ruta:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - conductorId
+        - origen
+        - destino
+        - trazado
+        - salida
+        - cuposTotales
+        - cuposDisponibles
+        - precioTotal
+        - estado
+      properties:
+        id:
+          type: string
+          pattern: '^ruta-[a-z0-9]+$'
+          example: ruta-1a2b3c4d5e6f7a8b
+        conductorId:
+          type: string
+          minLength: 1
+          example: usr-12
+        origen:
+          $ref: '#/components/schemas/Lugar'
+        destino:
+          $ref: '#/components/schemas/Lugar'
+        trazado:
+          $ref: '#/components/schemas/LineString'
+        salida:
+          type: string
+          format: date-time
+          description: Fecha de salida en UTC
+          example: '2026-11-21T06:30:00Z'
+        cuposTotales:
+          type: integer
+          minimum: 1
+          maximum: 6
+          example: 3
+        cuposDisponibles:
+          type: integer
+          minimum: 0
+          maximum: 6
+          example: 3
+        precioTotal:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Precio total del viaje en pesos
+          example: 12000
+        estado:
+          type: string
+          enum: [abierta, llena, cerrada]
+    CrearRuta:
+      type: object
+      additionalProperties: false
+      required:
+        - conductorId
+        - origen
+        - destino
+        - trazado
+        - salida
+        - cuposTotales
+        - precioTotal
+      properties:
+        conductorId:
+          type: string
+          minLength: 1
+          example: usr-12
+        origen:
+          $ref: '#/components/schemas/Lugar'
+        destino:
+          $ref: '#/components/schemas/Lugar'
+        trazado:
+          $ref: '#/components/schemas/LineString'
+        salida:
+          type: string
+          format: date-time
+          description: Debe ser futura. Se normaliza a UTC.
+          example: '2026-11-21T06:30:00Z'
+        cuposTotales:
+          type: integer
+          minimum: 1
+          maximum: 6
+          example: 3
+        precioTotal:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 12000
+    Lugar:
+      type: object
+      additionalProperties: false
+      required: [nombre, punto]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          example: Chapinero
+        punto:
+          $ref: '#/components/schemas/Point'
+    Point:
+      type: object
+      additionalProperties: false
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [Point]
+        coordinates:
+          type: array
+          description: 'Orden GeoJSON: [longitud, latitud]. Longitud entre -180 y 180; latitud entre -90 y 90.'
+          minItems: 2
+          maxItems: 2
+          items:
+            type: number
+          example: [-74.0645, 4.6486]
+    LineString:
+      type: object
+      additionalProperties: false
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [LineString]
+        coordinates:
+          type: array
+          description: 'Orden GeoJSON: cada posición es [longitud, latitud], con longitud entre -180 y 180 y latitud entre -90 y 90.'
+          minItems: 2
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              type: number
+          example:
+            - [-74.0645, 4.6486]
+            - [-74.0600, 4.6650]
+            - [-74.0415, 4.7012]
+    AjusteCupos:
+      type: object
+      additionalProperties: false
+      required: [delta]
+      properties:
+        delta:
+          type: integer
+          minimum: -6
+          maximum: 6
+          not:
+            enum: [0]
+          description: Negativo descuenta, positivo devuelve. No puede ser cero; la magnitud máxima es 6.
+          example: -1
+    Error:
+      type: object
+      additionalProperties: false
+      required: [codigo, mensaje, detalle]
+      properties:
+        codigo:
+          type: string
+          description: Código estable para clientes
+          enum:
+            - solicitud_invalida
+            - no_encontrada
+            - sin_cupos
+            - cupos_excedidos
+            - ruta_cerrada
+            - error_interno
+          example: sin_cupos
+        mensaje:
+          type: string
+          example: La ruta no tiene cupos disponibles
+        detalle:
+          type: object
+          additionalProperties: true
+          description: Contexto del error; nunca incluye tokens ni datos de pasajeros
+          example: {}

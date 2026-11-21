@@ -1,6 +1,6 @@
 # Trip Forge
 
-APIs de rutas y conductores del grupo A de Súbete. El proyecto usa Go, chi, MongoDB y JetBrains GoLand. Esta base de arranque sirve `GET /health` en dos procesos independientes. Las historias R-HU1 a R-HU6 y la persistencia de rutas están planificadas en la [propuesta](PROPUESTA-GRUPO-A.md).
+APIs de rutas y conductores del grupo A de Súbete. El proyecto usa Go, chi, MongoDB y JetBrains GoLand. Corre como dos procesos independientes. El primer hito publica, consulta y ajusta cupos de rutas en MongoDB; las historias restantes están planificadas en la [propuesta](PROPUESTA-GRUPO-A.md).
 
 ## Arranque local en Windows
 
@@ -26,16 +26,49 @@ Abre la carpeta que contiene `go.mod` en GoLand y selecciona el SDK instalado en
 
 Cada respuesta contiene `status: ok` y el nombre del proceso. Este chequeo mide disponibilidad HTTP. Para cambiar la dirección de un proceso, define `HTTP_ADDR` en su configuración de ejecución.
 
-## Verificación y primer hito
+## API CRUD de rutas (primer hito)
+
+`rutas-crud` es el único dueño de MongoDB. Expone estas operaciones del [contrato](api/rutas-crud.openapi.yaml):
+
+| Método y ruta | Resultado |
+| --- | --- |
+| `POST /rutas` | Crea una ruta `abierta`; responde 201 con `Location`. |
+| `GET /rutas/{id}` | Devuelve el detalle; 404 si no existe. |
+| `PATCH /rutas/{id}/cupos` | Descuenta o devuelve cupos; 409 `sin_cupos`, `cupos_excedidos` o `ruta_cerrada` según la condición. |
+
+Una publicación mínima se ve así:
+
+```powershell
+$cuerpo = @{
+  conductorId = 'usr-12'
+  origen = @{ nombre = 'Chapinero'; punto = @{ type = 'Point'; coordinates = @(-74.0645, 4.6486) } }
+  destino = @{ nombre = 'Universidad'; punto = @{ type = 'Point'; coordinates = @(-74.0415, 4.7012) } }
+  trazado = @{ type = 'LineString'; coordinates = @(@(-74.0645, 4.6486), @(-74.0415, 4.7012)) }
+  salida = (Get-Date).AddDays(2).ToUniversalTime().ToString('o')
+  cuposTotales = 3
+  precioTotal = 12000
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post http://127.0.0.1:8081/rutas -ContentType 'application/json' -Body $cuerpo
+```
+
+Los cupos se ajustan con `Invoke-RestMethod -Method Patch http://127.0.0.1:8081/rutas/<id>/cupos -ContentType 'application/json' -Body '{"delta":-1}'`. El cambio de disponibilidad y estado ocurre en una sola escritura condicional: dos solicitudes simultáneas por el último cupo producen una respuesta 200 y otra 409. Los errores usan `{ "codigo", "mensaje", "detalle" }`.
+
+Variables leídas por el CRUD: `HTTP_ADDR`, `MONGODB_URI` y `MONGODB_DB`. `MONGODB_TEST_URI` habilita las pruebas de integración; si queda vacío, se omiten. Copia `.env.example` como referencia.
+
+## Verificación
 
 ```powershell
 go vet ./...
-go test ./...
+docker compose up -d --wait
+$env:MONGODB_TEST_URI = 'mongodb://127.0.0.1:27017'
+go test -race ./...
 go build ./...
 docker compose config --quiet
 ```
 
-GitHub Actions comprueba además el formato y ejecuta las pruebas con el detector de carreras en Linux. El primer hito funcional es publicar una ruta, consultarla y descontar un cupo. Antes de integrarlo, el equipo debe acordar con el gateway la identidad, los scopes y la cabecera de confianza, y con Reservas los IDs, los errores y el manejo de reintentos.
+GitHub Actions levanta un servicio MongoDB 8, comprueba el formato de `cmd`, `internal` y `test`, ejecuta `go vet`, las pruebas con detector de carreras, la compilación y valida Compose. Las pruebas de integración usan una base de datos temporal y verifican la competencia por el último cupo contra Mongo real. En Windows, `-race` requiere CGO y un compilador C; el pipeline lo ejecuta en Linux.
+
+Antes de integrar el hito con el clúster, el equipo debe acordar con el gateway la identidad, los scopes y la cabecera de confianza, y con Reservas los IDs, los errores y el manejo de reintentos. La autorización de propietario y las 15 rutas semilla de R-HU1 quedan para la siguiente entrega.
 
 - [Requisitos del clúster](X1.cluster-subete.md) y [propuesta y secuencias](PROPUESTA-GRUPO-A.md).
 - [Contrato CRUD](api/rutas-crud.openapi.yaml) y [contrato MID](api/rutas-mid.openapi.yaml).

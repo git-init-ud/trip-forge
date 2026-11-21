@@ -2,7 +2,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -11,20 +13,30 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func router(service string) http.Handler {
-	r := chi.NewRouter()
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+func salud(service string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"service": service, "status": "ok"})
-	})
+	}
+}
+
+func router(service string) http.Handler {
+	r := chi.NewRouter()
+	r.Get("/health", salud(service))
 	return r
 }
 
-func Serve(service, defaultAddr string) error {
-	addr := os.Getenv("HTTP_ADDR")
-	if addr == "" {
-		addr = defaultAddr
+func direccion(defecto string) string {
+	if addr := os.Getenv("HTTP_ADDR"); addr != "" {
+		return addr
 	}
+	return defecto
+}
+
+// Serve mantiene el arranque simple que usan los procesos sin persistencia,
+// como el MID de rutas.
+func Serve(service, defaultAddr string) error {
+	addr := direccion(defaultAddr)
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           router(service),
@@ -32,4 +44,36 @@ func Serve(service, defaultAddr string) error {
 	}
 	log.Printf("%s listening on %s", service, addr)
 	return server.ListenAndServe()
+}
+
+// ServirRutas arranca el CRUD de rutas con su almacén y se apaga de forma
+// ordenada cuando el contexto se cancela.
+func ServirRutas(ctx context.Context, almacen AlmacenRutas) error {
+	addr := direccion("127.0.0.1:8081")
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           RouterRutas(almacen),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	errores := make(chan error, 1)
+	go func() {
+		errores <- server.ListenAndServe()
+	}()
+	log.Printf("rutas-crud listening on %s", addr)
+
+	select {
+	case err := <-errores:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		cierre, cancelar := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelar()
+		return server.Shutdown(cierre)
+	}
 }
