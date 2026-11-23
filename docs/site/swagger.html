@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Referencia OpenAPI ejecutable de las APIs de Trip Forge.">
   <title>Referencia OpenAPI · Trip Forge</title>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
   <link rel="stylesheet" href="styles.css">
@@ -23,13 +24,22 @@
       <a href="swagger.html?spec=api/rutas-crud.openapi.yaml">CRUD</a>
       <a href="swagger.html?spec=api/rutas-mid.openapi.yaml">MID</a>
       <a href="markdown.html?file=md/PROPUESTA-GRUPO-A.md">Propuesta</a>
+      <a href="markdown.html?file=md/README.md">Instrucciones</a>
     </nav>
   </header>
 
   <p class="aviso">
-    Referencia de solo lectura. Para probar las operaciones usa PowerShell o curl
-    contra <code>http://127.0.0.1:8081</code> y <code>http://127.0.0.1:8082</code>.
+    <strong>Documentación ejecutable.</strong> Para el CRUD levanta MongoDB y
+    <code>go run ./cmd/rutas-crud</code>; para el MID, solo
+    <code>go run ./cmd/rutas-mid</code>. En cada operación abre
+    <em>Try it out</em> y pulsa <em>Execute</em>. El visor llama a
+    <code>http://127.0.0.1:8081</code> y <code>http://127.0.0.1:8082</code>;
+    los servicios autorizan el origen del visor
+    (<code>http://127.0.0.1:8090</code>) por CORS. Las fechas de los ejemplos
+    son futuras para que puedas publicar sin editar el cuerpo. Más detalle en
+    el <a href="markdown.html?file=md/README.md">README</a>.
   </p>
+  <p class="estado" id="estado-servicio" role="status" aria-live="polite">Comprobando el servicio…</p>
 
   <main class="swagger-wrap">
     <div id="swagger-ui"></div>
@@ -37,19 +47,29 @@
 
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
   <script>
-    const permitidos = [
-      "api/rutas-crud.openapi.yaml",
-      "api/rutas-mid.openapi.yaml"
-    ];
+    const contratos = {
+      "api/rutas-crud.openapi.yaml": {
+        titulo: "CRUD de rutas",
+        nombre: "CRUD",
+        esperado: "rutas-crud",
+        url: "http://127.0.0.1:8081",
+        comando: "go run ./cmd/rutas-crud"
+      },
+      "api/rutas-mid.openapi.yaml": {
+        titulo: "MID de rutas",
+        nombre: "MID",
+        esperado: "rutas-mid",
+        url: "http://127.0.0.1:8082",
+        comando: "go run ./cmd/rutas-mid"
+      }
+    };
+    const permitidos = Object.keys(contratos);
     const parametros = new URLSearchParams(window.location.search);
     const solicitado = parametros.get("spec");
     const especificacion = permitidos.includes(solicitado) ? solicitado : permitidos[0];
-    const titulos = {
-      "api/rutas-crud.openapi.yaml": "CRUD de rutas",
-      "api/rutas-mid.openapi.yaml": "MID de rutas"
-    };
-    document.title = (titulos[especificacion] || "Referencia") + " · Trip Forge";
-    document.querySelector(".topbar strong").textContent = "Trip Forge · " + (titulos[especificacion] || "Referencia");
+    const contrato = contratos[especificacion];
+    document.title = contrato.titulo + " · Trip Forge";
+    document.querySelector(".topbar strong").textContent = "Trip Forge · " + contrato.titulo;
 
     window.ui = SwaggerUIBundle({
       url: especificacion,
@@ -58,10 +78,96 @@
       displayRequestDuration: true,
       docExpansion: "list",
       defaultModelsExpandDepth: 1,
-      supportedSubmitMethods: [],
+      tryItOutEnabled: true,
+      validatorUrl: null,
       presets: [SwaggerUIBundle.presets.apis],
       layout: "BaseLayout"
     });
+
+    function specCargado() {
+      try {
+        return Boolean(window.ui.getState().get("spec"));
+      } catch {
+        return false;
+      }
+    }
+
+    function urlDelServidor() {
+      try {
+        const lista = window.ui.specSelectors.servers();
+        if (lista && typeof lista.size === "number" && lista.size > 0) {
+          const primero = lista.get(0);
+          const url = typeof primero.get === "function" ? primero.get("url") : primero.url;
+          if (typeof url === "string" && url) {
+            return url;
+          }
+        }
+        if (Array.isArray(lista) && lista.length > 0) {
+          const primero = lista[0];
+          const url = typeof primero === "string"
+            ? primero
+            : (typeof primero.get === "function" ? primero.get("url") : primero.url);
+          if (typeof url === "string" && url) {
+            return url;
+          }
+        }
+      } catch {
+        // Si el contrato aún no terminó de cargar, se usa la URL de respaldo.
+      }
+      return contrato.url;
+    }
+
+    async function esperarUrlDelServidor() {
+      for (let intento = 0; intento < 10; intento++) {
+        if (specCargado()) {
+          return urlDelServidor();
+        }
+        await new Promise((resolver) => setTimeout(resolver, 100));
+      }
+      return contrato.url;
+    }
+
+    async function consultarSalud(url) {
+      const controlador = new AbortController();
+      const temporizador = setTimeout(() => controlador.abort(), 3000);
+      try {
+        return await fetch(url + "/health?t=" + Date.now(), { signal: controlador.signal });
+      } finally {
+        clearTimeout(temporizador);
+      }
+    }
+
+    async function comprobarServicio() {
+      const estado = document.getElementById("estado-servicio");
+      const url = await esperarUrlDelServidor();
+      try {
+        const respuesta = await consultarSalud(url);
+        if (!respuesta.ok) {
+          throw new Error("estado " + respuesta.status);
+        }
+        const cuerpo = await respuesta.json();
+        if (cuerpo.status !== "ok" || cuerpo.service !== contrato.esperado) {
+          throw new Error("servicio_inesperado");
+        }
+        estado.textContent = contrato.nombre + " disponible en " + url +
+          " (" + cuerpo.service + "). Puedes ejecutar las operaciones.";
+        estado.dataset.estado = "ok";
+      } catch (error) {
+        if (error && error.message === "servicio_inesperado") {
+          estado.textContent = "El puerto de " + contrato.nombre + " (" + url +
+            ") respondió, pero no es " + contrato.esperado +
+            ". Revisa qué proceso está escuchando y recarga la página.";
+        } else {
+          estado.textContent = contrato.nombre + " no responde en " + url +
+            " o el origen del visor no está autorizado por CORS. Inícialo con " +
+            contrato.comando + ", revisa CORS_ORIGINS y recarga la página.";
+        }
+        estado.dataset.estado = "error";
+      }
+    }
+
+    // Deja que Swagger UI cargue servers del contrato antes de consultar.
+    setTimeout(comprobarServicio, 300);
   </script>
 </body>
 </html>

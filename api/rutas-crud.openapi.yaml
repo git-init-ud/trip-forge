@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Súbete · rutas-crud
-  version: 0.2.0
+  version: 0.2.1
   description: |
     CRUD de rutas del grupo A. Es el único dueño de MongoDB.
 
@@ -9,11 +9,18 @@ info:
     forma atómica. Los puntos geográficos usan el orden de GeoJSON
     `[longitud, latitud]` y las fechas de salida se guardan y devuelven en UTC.
 
+    El contrato es ejecutable desde el visor OpenAPI: levanta MongoDB y el
+    proceso, abre una operación y usa `Try it out`. El visor corre por defecto
+    en `http://127.0.0.1:8090` y el CRUD autoriza ese origen por CORS
+    (configurable con `CORS_ORIGINS`); las fechas de los ejemplos son futuras
+    para que `POST /rutas` funcione sin editarlas.
+
     Pendiente con el gateway: nombre de la cabecera de confianza, identidad del
     conductor y scopes. Mientras no exista ese acuerdo, `conductorId` viaja en el
     cuerpo de `POST /rutas` y la API no aplica autorización de propietario.
 servers:
   - url: http://127.0.0.1:8081
+    description: Proceso local del CRUD, usado por el visor OpenAPI
 tags:
   - name: salud
   - name: rutas
@@ -75,7 +82,7 @@ paths:
                   - [-74.0645, 4.6486]
                   - [-74.0600, 4.6650]
                   - [-74.0415, 4.7012]
-              salida: '2026-11-21T06:30:00Z'
+              salida: '2030-01-15T06:30:00Z'
               cuposTotales: 3
               precioTotal: 12000
       responses:
@@ -88,9 +95,7 @@ paths:
                 type: string
                 example: /rutas/ruta-1a2b3c4d5e6f7a8b
             X-Request-Id:
-              description: Identificador de la solicitud, propio o generado por el servidor
-              schema:
-                type: string
+              $ref: '#/components/headers/X-Request-Id'
           content:
             application/json:
               schema:
@@ -106,14 +111,15 @@ paths:
       operationId: obtenerRuta
       tags: [rutas]
       summary: Consulta el detalle de una ruta
+      description: |
+        Devuelve la ruta indicada. Usa el `id` que devolvió `POST /rutas`
+        para encadenar la ejecución desde el visor OpenAPI.
       responses:
         '200':
           description: Ruta encontrada
           headers:
             X-Request-Id:
-              description: Identificador de la solicitud, propio o generado por el servidor
-              schema:
-                type: string
+              $ref: '#/components/headers/X-Request-Id'
           content:
             application/json:
               schema:
@@ -135,6 +141,9 @@ paths:
         suficientes. Con valores positivos acepta rutas `abiertas` o `llenas` y
         no permite superar `cuposTotales`.
 
+        Usa el `id` que devolvió `POST /rutas` para encadenar la ejecución
+        desde el visor OpenAPI.
+
         La disponibilidad y el estado cambian juntos: al llegar a cero la ruta
         pasa a `llena` y al devolver un cupo vuelve a `abierta`. Dos solicitudes
         simultáneas por el último cupo producen un `200` y un `409 sin_cupos`.
@@ -154,9 +163,7 @@ paths:
           description: Ruta con la disponibilidad y el estado actualizados
           headers:
             X-Request-Id:
-              description: Identificador de la solicitud, propio o generado por el servidor
-              schema:
-                type: string
+              $ref: '#/components/headers/X-Request-Id'
           content:
             application/json:
               schema:
@@ -172,6 +179,9 @@ paths:
             (incluido un descuento sobre una ruta cerrada), `cupos_excedidos`
             cuando una devolución supera el total y `ruta_cerrada` cuando se
             intenta devolver cupos a una ruta cerrada.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
           content:
             application/json:
               schema:
@@ -186,6 +196,11 @@ paths:
         '500':
           $ref: '#/components/responses/ErrorInterno'
 components:
+  headers:
+    X-Request-Id:
+      description: Identificador de la solicitud, propio o generado por el servidor; también viaja en las respuestas de error
+      schema:
+        type: string
   parameters:
     RutaId:
       name: id
@@ -199,6 +214,9 @@ components:
   responses:
     SolicitudInvalida:
       description: Cuerpo o campos inválidos
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
       content:
         application/json:
           schema:
@@ -210,6 +228,9 @@ components:
               campo: cuposTotales
     NoEncontrada:
       description: La ruta no existe
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
       content:
         application/json:
           schema:
@@ -221,6 +242,9 @@ components:
               rutaId: ruta-1a2b3c4d5e6f7a8b
     ErrorInterno:
       description: Fallo inesperado del servidor
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
       content:
         application/json:
           schema:
@@ -263,7 +287,7 @@ components:
           type: string
           format: date-time
           description: Fecha de salida en UTC
-          example: '2026-11-21T06:30:00Z'
+          example: '2030-01-15T06:30:00Z'
         cuposTotales:
           type: integer
           minimum: 1
@@ -309,7 +333,7 @@ components:
           type: string
           format: date-time
           description: Debe ser futura. Se normaliza a UTC.
-          example: '2026-11-21T06:30:00Z'
+          example: '2030-01-15T06:30:00Z'
         cuposTotales:
           type: integer
           minimum: 1

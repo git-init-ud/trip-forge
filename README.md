@@ -54,15 +54,28 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8081/rutas -ContentType 'applica
 
 Los cupos se ajustan con `Invoke-RestMethod -Method Patch http://127.0.0.1:8081/rutas/<id>/cupos -ContentType 'application/json' -Body '{"delta":-1}'`. El cambio de disponibilidad y estado ocurre en una sola escritura condicional: dos solicitudes simultáneas por el último cupo producen una respuesta 200 y otra 409. Los errores usan `{ "codigo", "mensaje", "detalle" }`.
 
-Variables leídas por el CRUD: `HTTP_ADDR`, `MONGODB_URI` y `MONGODB_DB`. `MONGODB_TEST_URI` habilita las pruebas de integración; si queda vacío, se omiten. Copia `.env.example` como referencia.
+Variables leídas por el CRUD: `HTTP_ADDR`, `MONGODB_URI`, `MONGODB_DB` y `CORS_ORIGINS`. El MID lee `HTTP_ADDR` y `CORS_ORIGINS`. `MONGODB_TEST_URI` habilita las pruebas de integración; si queda vacío, se omiten. Copia `.env.example` como referencia.
 
-## Documentación en el navegador
+## Documentación OpenAPI ejecutable
+
+El visor sirve los dos contratos con Swagger UI y permite ejecutar sus operaciones desde el navegador. Arranca MongoDB y cada servicio en terminales separadas:
 
 ```powershell
+docker compose up -d --wait
+go run ./cmd/rutas-crud
+go run ./cmd/rutas-mid
 go run ./cmd/docs
 ```
 
-Abre `http://127.0.0.1:8090`. El visor reúne los dos contratos OpenAPI con Swagger UI y los documentos del repositorio con enlaces entre ellos. Los YAML también quedan como archivos en `/api/` y los Markdown en `/md/`. Cambia la dirección con `HTTP_ADDR` y la raíz con `DOCS_ROOT`. Swagger UI y el renderizador de Markdown se cargan desde CDN; si no hay internet, los archivos crudos siguen disponibles.
+Abre `http://127.0.0.1:8090`, elige **CRUD** o **MID** y usa **Try it out → Execute** en cada operación. Para encadenar el CRUD: ejecuta `POST /rutas`, copia el `id` de la respuesta en `GET /rutas/{id}` o en `PATCH /rutas/{id}/cupos` y envía `{"delta": -1}`. La página indica si el servicio elegido responde en `http://127.0.0.1:8081` o `http://127.0.0.1:8082`. Los ejemplos usan una fecha de salida futura, así que la publicación funciona sin editar el cuerpo.
+
+Las operaciones ejecutables son las publicadas en cada contrato: en el CRUD, `POST /rutas`, `GET /rutas/{id}`, `PATCH /rutas/{id}/cupos` y `GET /health`; en el MID, `GET /health`. El listado, la edición y el cierre de rutas, la búsqueda de rutas compatibles y el panel del conductor siguen pendientes de implementación y aparecerán en el visor cuando se agreguen a su contrato.
+
+El navegador exige CORS porque el visor corre en el puerto 8090 y las APIs en 8081 y 8082. Ambos servicios autorizan por defecto `http://127.0.0.1:8090` y `http://localhost:8090`. Si abres el visor desde otro origen, define `CORS_ORIGINS` con la lista de orígenes exactos separados por comas; el comodín `*` no se acepta y se ignora con una advertencia. La variable se lee al arrancar cada proceso, así que reinícialo tras cambiarla. Cuando el gateway acuerde su cabecera de confianza, agrégala a la lista de cabeceras CORS y pruébala en el preflight. Un preflight desde un origen no autorizado responde 403: las solicitudes que lo requieren, como `POST` o `PATCH` con JSON, no se envían; una solicitud simple puede llegar al servicio, pero el navegador oculta su respuesta.
+
+Los procesos Go leen variables del entorno y no cargan `.env` automáticamente. `.env` lo usa Compose para `MONGO_PORT`; para cambiar `CORS_ORIGINS`, expórtala en la terminal o configúrala en la ejecución de GoLand.
+
+El visor también reúne los documentos del repositorio con enlaces entre ellos. Los YAML quedan como archivos en `/api/` y los Markdown en `/md/`. Cambia la dirección del visor con `HTTP_ADDR` y la raíz con `DOCS_ROOT`; si cambias el puerto, agrega el nuevo origen a `CORS_ORIGINS`. Si cambias el `HTTP_ADDR` de una API, actualiza la URL en `servers` del contrato correspondiente; el visor usa esa URL para ejecutar y para la comprobación de salud. Swagger UI y el renderizador de Markdown se cargan desde CDN; si no hay internet, los archivos crudos siguen disponibles.
 
 ## Verificación
 

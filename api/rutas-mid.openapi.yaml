@@ -1,17 +1,34 @@
 openapi: 3.0.3
 info:
   title: Súbete · rutas-mid
-  version: 0.1.0
+  version: 0.1.1
+  description: |
+    MID de rutas del grupo A. Este contrato publica la salud del proceso y
+    reserva el espacio para la búsqueda de rutas compatibles y el panel del
+    conductor, que llegan en la siguiente entrega.
+
+    Es ejecutable desde el visor OpenAPI: levanta el proceso, abre una
+    operación y usa `Try it out`. El visor corre por defecto en
+    `http://127.0.0.1:8090` y el MID autoriza ese origen por CORS (configurable
+    con `CORS_ORIGINS`). Las operaciones que se agreguen deben mantener el
+    mismo formato de error del clúster y las reglas de la propuesta del grupo A.
 servers:
   - url: http://127.0.0.1:8082
+    description: Proceso local del MID, usado por el visor OpenAPI
+tags:
+  - name: salud
 paths:
   /health:
     get:
       operationId: health
+      tags: [salud]
       summary: Comprueba que el proceso HTTP responde
       responses:
         '200':
           description: Servicio activo
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
           content:
             application/json:
               schema:
@@ -24,3 +41,9 @@ paths:
                   service:
                     type: string
                     enum: [rutas-mid]
+components:
+  headers:
+    X-Request-Id:
+      description: Identificador de la solicitud, propio o generado por el servidor
+      schema:
+        type: string

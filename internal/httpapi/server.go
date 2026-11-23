@@ -22,6 +22,10 @@ func salud(service string) http.HandlerFunc {
 
 func router(service string) http.Handler {
 	r := chi.NewRouter()
+	// requestID va antes de CORS para que las respuestas reales y el preflight
+	// lleven X-Request-Id; CORS responde el preflight antes de chi.
+	r.Use(requestID)
+	r.Use(cors)
 	r.Get("/health", salud(service))
 	return r
 }

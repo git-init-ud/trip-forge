@@ -202,6 +202,24 @@ footer code {
   font-weight: 700;
 }
 
+.estado {
+  max-width: 1120px;
+  margin: 0.35rem auto 0;
+  padding: 0 1.25rem;
+  color: var(--tinta-suave);
+  font-size: 0.88rem;
+}
+
+.estado[data-estado="ok"] {
+  color: var(--verde);
+  font-weight: 700;
+}
+
+.estado[data-estado="error"] {
+  color: var(--acento);
+  font-weight: 700;
+}
+
 .contenido {
   max-width: 860px;
   margin: 0 auto;

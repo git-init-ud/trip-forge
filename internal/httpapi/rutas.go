@@ -21,8 +21,11 @@ type AlmacenRutas interface {
 // de cupos.
 func RouterRutas(almacen AlmacenRutas) http.Handler {
 	r := chi.NewRouter()
+	// CORS va antes del recuperador y de chi para responder el preflight del
+	// visor OpenAPI; requestID y el registro también cubren esa respuesta.
 	r.Use(requestID)
 	r.Use(registrarSolicitudes)
+	r.Use(cors)
 	r.Use(recuperar)
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		responderJSON(w, http.StatusNotFound, errorRespuesta{
