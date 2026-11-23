@@ -3,7 +3,7 @@
 APIs de rutas y conductores del grupo A de Súbete. El proyecto usa Go, chi, MongoDB y JetBrains GoLand, y corre como dos procesos independientes:
 
 - **rutas-crud** es el único dueño de MongoDB. Publica, lista, edita, cierra y ajusta cupos de rutas.
-- **rutas-mid** busca rutas compatibles y arma el panel del conductor. Consulta el CRUD por HTTP y el puntaje de Pasajeros y reputación por el gateway; no toca MongoDB.
+- **rutas-mid** busca rutas compatibles, arma el panel y genera trazados viales con openrouteservice. Consulta el CRUD por HTTP y el puntaje de Pasajeros y reputación por el gateway; no toca MongoDB.
 
 Las reglas de cupos se aplican en una sola escritura condicional y la geometría/ranking del MID se prueba sin HTTP ni base de datos. Los contratos están en [`api/`](api/) y los acuerdos pendientes con el clúster en la [propuesta](PROPUESTA-GRUPO-A.md).
 
@@ -40,6 +40,13 @@ Los procesos Go no cargan `.env` automáticamente: exporta las variables en la t
 | `MONGODB_DB` | CRUD, seed | `trip_forge` | Base de datos del servicio. |
 | `RUTAS_CRUD_URL` | MID | `http://127.0.0.1:8081` | CRUD que consulta el MID. |
 | `REPUTACION_URL` | MID | `http://127.0.0.1:8083` | Servicio de Pasajeros y reputación o su doble. |
+| `MID_URL` | CRUD, seed | `http://127.0.0.1:8082` | MID que genera trazados para la publicación automática. |
+| `MID_TIMEOUT_MS` | CRUD | `5000` | Plazo de la llamada del CRUD al MID vial. |
+| `ORS_URL` | MID | `https://api.openrouteservice.org` | URL base del proveedor vial. |
+| `ORS_API_KEY` | MID | vacío | Clave privada de openrouteservice; obligatoria solo para generar trazados. |
+| `ORS_PROFILE` | MID | `driving-car` | Perfil vial (`driving-car` o `driving-hgv`). |
+| `ORS_TIMEOUT_MS` | MID | `4000` | Plazo total para el proveedor, incluido un posible reintento. |
+| `ORS_CACHE_TTL_S` | MID | `3600` | Vida de trazados exitosos en caché, en segundos. |
 | `RADIO_M` | MID | `800` | Radio máximo de caminata al origen y al destino. |
 | `RUTAS_TIMEOUT_MS` | MID | `3000` | Plazo de las llamadas al CRUD. |
 | `REPUTACION_TIMEOUT_MS` | MID | `2000` | Plazo de las llamadas a reputación. |
@@ -161,13 +168,19 @@ docker compose config --quiet
 
 GitHub Actions levanta MongoDB 8, comprueba el formato de `cmd`, `internal` y `test`, valida los dos contratos con `swagger-cli`, ejecuta `go vet`, las pruebas con detector de carreras, la compilación y valida Compose. Las pruebas de integración usan bases temporales y verifican la competencia por el último cupo, la edición concurrente, el cierre con cupos comprometidos, la búsqueda con reputación simulada y el panel. En Windows, `-race` requiere CGO y un compilador C; el pipeline lo ejecuta en Linux.
 
+## Generación vial
+
+Para publicar sin dibujar el trazado, configura `ORS_API_KEY` en el proceso MID y envía `POST /rutas` con `generarTrazado: true`, los campos habituales y **sin** `trazado`. El CRUD valida los demás campos, llama a `POST /interno/trazados` del MID y guarda el LineString GeoJSON devuelto. La operación manual con `trazado` sigue disponible. Un trayecto inexistente responde 422; si el MID o el proveedor no están disponibles y no existe una entrada en caché, responde 503. El cliente puede entonces volver a enviar una publicación manual. La caché es temporal y vive en la memoria del MID; se pierde al reiniciarlo.
+
+El MID usa [openrouteservice Directions GeoJSON](https://giscience.github.io/openrouteservice/api-reference/endpoints/directions/requests-and-return-types), `POST /v2/directions/driving-car/geojson`. Envía las coordenadas `[longitud, latitud]` y una clave en la cabecera `Authorization`; nunca la devuelve ni la registra. Aplica un plazo total, un único reintento para fallos de red, 429 y 5xx transitorios, y cachea trazados válidos por coordenadas y perfil. Las pruebas usan un servidor HTTP simulado, sin consumir cuota ni requerir clave real.
+
 ## Acuerdos pendientes con el clúster
 
 - **Gateway:** nombres definitivos de `X-Usuario-Id` y `X-Cluster-Secret`, emisión de tokens y scopes `rutas:leer`, `rutas:escribir` y `perfiles:leer`. Hoy la identidad y el secreto son provisionales, la comprobación del secreto está desactivada si `GATEWAY_SECRET` queda vacía y los tokens de servicio son opcionales.
 - **Reservas:** clave de idempotencia para `PATCH /rutas/{id}/cupos`, responsable de reconciliar devoluciones fallidas y confirmación de que `cuposTotales - cuposDisponibles` representa exactamente los cupos comprometidos. El cierre bloquea cupos ya descontados, no reservas pendientes sin descuento.
 - **Pasajeros y reputación:** confirmar que `puntaje` e `insignia` son obligatorios, que los campos adicionales son opcionales y que el 404 significa perfil inexistente. Falta la integración real con el gateway.
 - **Semilla:** confirmar los ids `ruta-0001..ruta-0015` y `usr-01..usr-12` con B y C. La semilla reinicia fechas, cupos y estados de las rutas semilla; no debe ejecutarse con reservas activas.
-- **API de tercero:** la generación vial con openrouteservice y su operación interna siguen pendientes; el MID todavía no consume ese proveedor.
+- **API de tercero:** confirmar con el clúster el enrutamiento de la operación interna `POST /interno/trazados`; el CRUD la llama directamente mediante `MID_URL`.
 
 - [Requisitos del clúster](X1.cluster-subete.md) y [propuesta y secuencias](PROPUESTA-GRUPO-A.md).
 - [Contrato CRUD](api/rutas-crud.openapi.yaml) y [contrato MID](api/rutas-mid.openapi.yaml).

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Súbete · rutas-crud
-  version: 0.3.0
+  version: 0.4.0
   description: |
     CRUD de rutas del grupo A. Es el único dueño de MongoDB.
 
@@ -142,6 +142,13 @@ paths:
         `cuposTotales`. El identificador, la disponibilidad inicial y el estado
         los asigna el servidor.
 
+        Con `generarTrazado: true` se omite `trazado`: el CRUD solicita al MID
+        un LineString vial generado por openrouteservice. El MID usa un plazo
+        total de `ORS_TIMEOUT_MS`, un reintento para fallos transitorios y una
+        caché por coordenadas y perfil durante `ORS_CACHE_TTL_S`. Si falla sin
+        caché responde 503; el cliente puede repetir la publicación enviando
+        un trazado válido. Si no existe un trayecto vial responde 422.
+
         Rechaza `cuposTotales` fuera de 1 a 6, `precioTotal` negativo, `salida`
         que no sea futura, coordenadas fuera de rango y trazados con menos de
         dos puntos.
@@ -198,6 +205,18 @@ paths:
           $ref: '#/components/responses/NoAutenticado'
         '403':
           $ref: '#/components/responses/NoAutorizado'
+        '422':
+          description: No existe un trayecto vial entre los puntos solicitados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: MID o proveedor vial indisponible durante la generación
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           $ref: '#/components/responses/ErrorInterno'
   /rutas/{id}:
@@ -629,11 +648,21 @@ components:
     CrearRuta:
       type: object
       additionalProperties: false
+      oneOf:
+        - required: [trazado]
+          properties:
+            generarTrazado:
+              enum: [false]
+        - required: [generarTrazado]
+          properties:
+            generarTrazado:
+              enum: [true]
+          not:
+            required: [trazado]
       required:
         - conductorId
         - origen
         - destino
-        - trazado
         - salida
         - cuposTotales
         - precioTotal
@@ -648,6 +677,10 @@ components:
           $ref: '#/components/schemas/Lugar'
         trazado:
           $ref: '#/components/schemas/LineString'
+        generarTrazado:
+          type: boolean
+          default: false
+          description: Si es true, omitir trazado y solicitar la geometría vial al MID. Si es false, trazado es obligatorio.
         salida:
           type: string
           format: date-time
@@ -774,6 +807,8 @@ components:
             - ruta_cerrada
             - no_autorizado
             - reservas_activas
+            - ruta_vial_no_encontrada
+            - dependencia_no_disponible
             - error_interno
           example: sin_cupos
         mensaje:

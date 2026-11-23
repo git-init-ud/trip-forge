@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Súbete · rutas-mid
-  version: 0.2.0
+  version: 0.3.0
   description: |
     MID de rutas del grupo A. Busca rutas compatibles para un pasajero y arma
     el panel de ocupación de un conductor.
@@ -9,6 +9,11 @@ info:
     El MID no accede a MongoDB: consulta el CRUD por HTTP y consume el puntaje
     del conductor por el gateway. Las reglas geográficas y el ranking viven en
     el MID y se prueban sin HTTP ni base de datos.
+
+    `POST /interno/trazados` es una operación interna para el CRUD. Llama a
+    openrouteservice Directions GeoJSON con `ORS_API_KEY` y perfil
+    `driving-car` por defecto. Aplica plazo total, un reintento transitorio y
+    caché temporal. La clave solo vive en el entorno del MID.
 
     Configuración provisional, pendiente de acuerdo con el clúster:
     `RUTAS_CRUD_URL` (por defecto `http://127.0.0.1:8081`), `REPUTACION_URL`
@@ -35,6 +40,7 @@ tags:
   - name: salud
   - name: busqueda
   - name: conductores
+  - name: vial
 paths:
   /health:
     get:
@@ -59,6 +65,47 @@ paths:
                   service:
                     type: string
                     enum: [rutas-mid]
+  /interno/trazados:
+    post:
+      operationId: generarTrazadoVial
+      tags: [vial]
+      summary: Genera un LineString vial para el CRUD
+      description: Operación interna. Recibe extremos GeoJSON [longitud, latitud]. El CRUD valida el trazado antes de guardarlo. Una caída del proveedor sin caché devuelve 503; un trayecto imposible devuelve 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [origen, destino]
+              properties:
+                origen:
+                  $ref: '#/components/schemas/Point'
+                destino:
+                  $ref: '#/components/schemas/Point'
+            example:
+              origen: {type: Point, coordinates: [-74.0645, 4.6486]}
+              destino: {type: Point, coordinates: [-74.0415, 4.7012]}
+      responses:
+        '200':
+          description: Trazado vial generado o servido desde caché
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LineString'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '401':
+          $ref: '#/components/responses/NoAutorizado'
+        '422':
+          description: El proveedor no encontró un trayecto vial
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/DependenciaNoDisponible'
   /rutas/compatibles:
     get:
       operationId: buscarRutasCompatibles
@@ -256,8 +303,8 @@ components:
     DependenciaNoDisponible:
       description: |
         Una dependencia necesaria para calcular la respuesta no está
-        disponible. `detalle.servicio` indica cuál: `rutas-crud` o
-        `reputacion`.
+        disponible. `detalle.servicio` indica cuál: `rutas-crud`,
+        `reputacion` u `openrouteservice`.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -504,6 +551,7 @@ components:
             - no_encontrada
             - no_autorizado
             - dependencia_no_disponible
+            - ruta_vial_no_encontrada
             - error_interno
           example: dependencia_no_disponible
         mensaje:
