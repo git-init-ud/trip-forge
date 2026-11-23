@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/git-init-ud/trip-forge/internal/clients"
 	"github.com/git-init-ud/trip-forge/internal/mid"
 	"github.com/go-chi/chi/v5"
 )
@@ -14,7 +15,11 @@ import (
 // RouterMID arma el API HTTP del MID: salud, búsqueda de rutas compatibles y
 // panel del conductor. El orden del middleware es el mismo que RouterRutas:
 // request id, registro, CORS, secreto del gateway y recuperación de pánicos.
-func RouterMID(servicio *mid.Servicio) http.Handler {
+func RouterMID(servicio *mid.Servicio, generadores ...clients.GeneradorVial) http.Handler {
+	var generador clients.GeneradorVial
+	if len(generadores) > 0 {
+		generador = generadores[0]
+	}
 	r := chi.NewRouter()
 	r.Use(requestID)
 	r.Use(registrarSolicitudes)
@@ -39,16 +44,17 @@ func RouterMID(servicio *mid.Servicio) http.Handler {
 	r.Get("/health", salud("rutas-mid"))
 	r.Get("/rutas/compatibles", buscarRutasCompatibles(servicio))
 	r.Get("/conductores/{id}/panel", panelConductor(servicio))
+	r.Post("/interno/trazados", generarTrazado(generador))
 	return r
 }
 
 // ServirMID arranca el MID de rutas y se apaga de forma ordenada cuando el
 // contexto se cancela.
-func ServirMID(ctx context.Context, servicio *mid.Servicio) error {
+func ServirMID(ctx context.Context, servicio *mid.Servicio, generadores ...clients.GeneradorVial) error {
 	addr := direccion("127.0.0.1:8082")
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           RouterMID(servicio),
+		Handler:           RouterMID(servicio, generadores...),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

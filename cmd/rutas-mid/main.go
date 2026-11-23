@@ -54,8 +54,15 @@ func ejecutar() error {
 	if err != nil {
 		return err
 	}
-
-	return httpapi.ServirMID(ctx, servicio)
+	proveedor, err := clients.NuevoClienteORS(
+		variable("ORS_URL", "https://api.openrouteservice.org"),
+		os.Getenv("ORS_API_KEY"), variable("ORS_PROFILE", "driving-car"),
+		milisegundos("ORS_TIMEOUT_MS", 4000), time.Duration(enteroPositivo("ORS_CACHE_TTL_S", 3600))*time.Second,
+	)
+	if err != nil {
+		return err
+	}
+	return httpapi.ServirMID(ctx, servicio, proveedor)
 }
 
 func variable(nombre, defecto string) string {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-init-ud/trip-forge/internal/clients"
 	"github.com/git-init-ud/trip-forge/internal/rutas"
 	"github.com/go-chi/chi/v5"
 )
@@ -23,7 +24,11 @@ type AlmacenRutas interface {
 
 // RouterRutas arma el API HTTP del CRUD: salud, listado, publicación, detalle,
 // edición, cierre y ajuste de cupos.
-func RouterRutas(almacen AlmacenRutas) http.Handler {
+func RouterRutas(almacen AlmacenRutas, generadores ...clients.GeneradorVial) http.Handler {
+	var generador clients.GeneradorVial
+	if len(generadores) > 0 {
+		generador = generadores[0]
+	}
 	r := chi.NewRouter()
 	// CORS va antes del recuperador y de chi para responder el preflight del
 	// visor OpenAPI; requestID y el registro también cubren esa respuesta.
@@ -50,7 +55,7 @@ func RouterRutas(almacen AlmacenRutas) http.Handler {
 	r.Get("/health", salud("rutas-crud"))
 	r.Route("/rutas", func(r chi.Router) {
 		r.Get("/", listarRutas(almacen))
-		r.Post("/", crearRuta(almacen))
+		r.Post("/", crearRuta(almacen, generador))
 		r.Get("/{id}", obtenerRuta(almacen))
 		r.Put("/{id}", actualizarRuta(almacen))
 		r.Delete("/{id}", cerrarRuta(almacen))
@@ -92,7 +97,7 @@ func listarRutas(almacen AlmacenRutas) http.HandlerFunc {
 	}
 }
 
-func crearRuta(almacen AlmacenRutas) http.HandlerFunc {
+func crearRuta(almacen AlmacenRutas, generador clients.GeneradorVial) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identidad := usuarioAutenticado(r)
 		// Con el gateway activo la identidad es obligatoria antes de leer el
@@ -115,6 +120,26 @@ func crearRuta(almacen AlmacenRutas) http.HandlerFunc {
 		if identidad != "" && identidad != strings.TrimSpace(entrada.ConductorID) {
 			responderError(w, r, rutas.ErrNoAutorizado, "")
 			return
+		}
+		if solicitud.GenerarTrazado {
+			if solicitud.Trazado != nil {
+				responderError(w, r, &rutas.ErrorValidacion{Campo: "trazado", Motivo: "debe omitirse al solicitar generación automática"}, "")
+				return
+			}
+			if err := entrada.ValidarSinTrazado(time.Now()); err != nil {
+				responderError(w, r, err, "")
+				return
+			}
+			if generador == nil {
+				responderError(w, r, clients.ErrNoDisponible, "")
+				return
+			}
+			ctx := clients.ConRequestID(r.Context(), requestIDDe(r.Context()))
+			entrada.Trazado, err = generador.Generar(ctx, entrada.Origen.Punto, entrada.Destino.Punto)
+			if err != nil {
+				responderError(w, r, err, "")
+				return
+			}
 		}
 		ruta, err := rutas.Nueva(entrada, time.Now())
 		if err != nil {

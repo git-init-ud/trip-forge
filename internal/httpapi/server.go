@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/git-init-ud/trip-forge/internal/clients"
 	"log"
 	"net/http"
 	"os"
@@ -41,11 +42,11 @@ func direccion(defecto string) string {
 
 // ServirRutas arranca el CRUD de rutas con su almacén y se apaga de forma
 // ordenada cuando el contexto se cancela.
-func ServirRutas(ctx context.Context, almacen AlmacenRutas) error {
+func ServirRutas(ctx context.Context, almacen AlmacenRutas, generadores ...clients.GeneradorVial) error {
 	addr := direccion("127.0.0.1:8081")
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           RouterRutas(almacen),
+		Handler:           RouterRutas(almacen, generadores...),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

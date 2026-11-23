@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/git-init-ud/trip-forge/internal/clients"
 	"github.com/git-init-ud/trip-forge/internal/rutas"
 )
 
@@ -107,6 +108,10 @@ func mapearError(err error, rutaID string) (int, errorRespuesta) {
 			Mensaje: "La identidad autenticada no es la propietaria de la ruta",
 			Detalle: detalleRuta,
 		}
+	case errors.Is(err, clients.ErrSinRutaVial):
+		return http.StatusUnprocessableEntity, errorRespuesta{Codigo: "ruta_vial_no_encontrada", Mensaje: "No se encontró un trayecto vial entre origen y destino", Detalle: detalleRuta}
+	case errors.Is(err, clients.ErrNoDisponible):
+		return http.StatusServiceUnavailable, errorRespuesta{Codigo: codigoDependenciaNoDisponible, Mensaje: "El generador vial no está disponible", Detalle: map[string]any{"servicio": "rutas-mid"}}
 	default:
 		return http.StatusInternalServerError, errorRespuesta{
 			Codigo:  codigoErrorInterno,

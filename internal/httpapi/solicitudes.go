@@ -32,13 +32,14 @@ type lugarSolicitud struct {
 }
 
 type crearRutaSolicitud struct {
-	ConductorID  string              `json:"conductorId"`
-	Origen       lugarSolicitud      `json:"origen"`
-	Destino      lugarSolicitud      `json:"destino"`
-	Trazado      lineStringSolicitud `json:"trazado"`
-	Salida       string              `json:"salida"`
-	CuposTotales *int                `json:"cuposTotales"`
-	PrecioTotal  *int64              `json:"precioTotal"`
+	ConductorID    string               `json:"conductorId"`
+	Origen         lugarSolicitud       `json:"origen"`
+	Destino        lugarSolicitud       `json:"destino"`
+	Trazado        *lineStringSolicitud `json:"trazado"`
+	GenerarTrazado bool                 `json:"generarTrazado"`
+	Salida         string               `json:"salida"`
+	CuposTotales   *int                 `json:"cuposTotales"`
+	PrecioTotal    *int64               `json:"precioTotal"`
 }
 
 type ajusteCuposSolicitud struct {
@@ -68,11 +69,15 @@ func (s crearRutaSolicitud) aDominio() (rutas.CrearRuta, error) {
 	if err != nil {
 		return rutas.CrearRuta{}, err
 	}
+	var trazado rutas.LineString
+	if s.Trazado != nil {
+		trazado = s.Trazado.aDominio()
+	}
 	return rutas.CrearRuta{
 		ConductorID:  s.ConductorID,
 		Origen:       s.Origen.aDominio(),
 		Destino:      s.Destino.aDominio(),
-		Trazado:      s.Trazado.aDominio(),
+		Trazado:      trazado,
 		Salida:       salida,
 		CuposTotales: *s.CuposTotales,
 		PrecioTotal:  *s.PrecioTotal,
