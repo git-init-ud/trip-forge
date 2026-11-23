@@ -24,6 +24,14 @@ type CrearRuta struct {
 // Validar comprueba las reglas de publicación de R-HU1 contra el instante
 // ahora. Devuelve un *ErrorValidacion con el campo que incumple la regla.
 func (c CrearRuta) Validar(ahora time.Time) error {
+	if err := c.ValidarSinTrazado(ahora); err != nil {
+		return err
+	}
+	return validarTrazado(c.Trazado)
+}
+
+// ValidarSinTrazado valida la publicación antes de solicitar un trazado vial.
+func (c CrearRuta) ValidarSinTrazado(ahora time.Time) error {
 	if strings.TrimSpace(c.ConductorID) == "" {
 		return campoInvalido("conductorId", "es obligatorio")
 	}
@@ -31,9 +39,6 @@ func (c CrearRuta) Validar(ahora time.Time) error {
 		return err
 	}
 	if err := validarLugar("destino", c.Destino); err != nil {
-		return err
-	}
-	if err := validarTrazado(c.Trazado); err != nil {
 		return err
 	}
 	if c.Salida.IsZero() {
@@ -49,6 +54,17 @@ func (c CrearRuta) Validar(ahora time.Time) error {
 		return campoInvalido("precioTotal", "no puede ser negativo")
 	}
 	return nil
+}
+
+// ValidarTrazado comprueba el LineString devuelto por un proveedor vial.
+func ValidarTrazado(trazado LineString) error { return validarTrazado(trazado) }
+
+// ValidarPunto comprueba un extremo GeoJSON de una solicitud vial.
+func ValidarPunto(campo string, punto Punto) error {
+	if punto.Type != TipoPunto {
+		return campoInvalido(campo+".type", `debe ser "Point"`)
+	}
+	return validarCoordenadas(campo+".coordinates", punto.Coordinates)
 }
 
 // Nueva valida la entrada, normaliza la salida a UTC y construye la ruta que se
