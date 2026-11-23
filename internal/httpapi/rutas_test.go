@@ -15,9 +15,12 @@ import (
 )
 
 type almacenFalso struct {
-	crear   func(context.Context, rutas.Ruta) error
-	obtener func(context.Context, string) (rutas.Ruta, error)
-	ajustar func(context.Context, string, int) (rutas.Ruta, error)
+	crear      func(context.Context, rutas.Ruta) error
+	obtener    func(context.Context, string) (rutas.Ruta, error)
+	ajustar    func(context.Context, string, int) (rutas.Ruta, error)
+	listar     func(context.Context, rutas.FiltroListado) (rutas.Listado, error)
+	actualizar func(context.Context, string, rutas.ActualizarRuta, string) (rutas.Ruta, error)
+	cerrar     func(context.Context, string, string) error
 }
 
 func (a *almacenFalso) Crear(ctx context.Context, ruta rutas.Ruta) error {
@@ -27,11 +30,32 @@ func (a *almacenFalso) Crear(ctx context.Context, ruta rutas.Ruta) error {
 	return a.crear(ctx, ruta)
 }
 
+func (a *almacenFalso) Listar(ctx context.Context, filtro rutas.FiltroListado) (rutas.Listado, error) {
+	if a.listar == nil {
+		return rutas.Listado{}, nil
+	}
+	return a.listar(ctx, filtro)
+}
+
 func (a *almacenFalso) Obtener(ctx context.Context, id string) (rutas.Ruta, error) {
 	if a.obtener == nil {
 		return rutas.Ruta{}, rutas.ErrNoEncontrada
 	}
 	return a.obtener(ctx, id)
+}
+
+func (a *almacenFalso) Actualizar(ctx context.Context, id string, cambios rutas.ActualizarRuta, identidad string) (rutas.Ruta, error) {
+	if a.actualizar == nil {
+		return rutas.Ruta{}, rutas.ErrNoEncontrada
+	}
+	return a.actualizar(ctx, id, cambios, identidad)
+}
+
+func (a *almacenFalso) Cerrar(ctx context.Context, id, identidad string) error {
+	if a.cerrar == nil {
+		return nil
+	}
+	return a.cerrar(ctx, id, identidad)
 }
 
 func (a *almacenFalso) AjustarCupos(ctx context.Context, id string, delta int) (rutas.Ruta, error) {
@@ -100,6 +124,17 @@ func cuerpoCreacion() map[string]any {
 	}
 }
 
+// cuerpoActualizacion reutiliza la forma de creación sin conductorId, que el
+// contrato de PUT no admite.
+func cuerpoActualizacion() map[string]any {
+	cuerpo := cuerpoCreacion()
+	delete(cuerpo, "conductorId")
+	cuerpo["salida"] = time.Now().Add(72 * time.Hour).UTC().Format(time.RFC3339)
+	cuerpo["cuposTotales"] = 4
+	cuerpo["precioTotal"] = 14000
+	return cuerpo
+}
+
 func solicitar(manejador http.Handler, metodo, ruta, cuerpo, tipoContenido, requestID string) *httptest.ResponseRecorder {
 	peticion := httptest.NewRequest(metodo, ruta, strings.NewReader(cuerpo))
 	if tipoContenido != "" {
@@ -120,6 +155,24 @@ func solicitarJSON(t *testing.T, manejador http.Handler, metodo, ruta string, cu
 		t.Fatalf("serializar el cuerpo: %v", err)
 	}
 	return solicitar(manejador, metodo, ruta, string(datos), "application/json", "")
+}
+
+// solicitarConUsuario envía JSON con la cabecera de identidad que el gateway
+// inyectaría. usuario vacío omite la cabecera.
+func solicitarConUsuario(t *testing.T, manejador http.Handler, metodo, ruta string, cuerpo any, usuario string) *httptest.ResponseRecorder {
+	t.Helper()
+	datos, err := json.Marshal(cuerpo)
+	if err != nil {
+		t.Fatalf("serializar el cuerpo: %v", err)
+	}
+	peticion := httptest.NewRequest(metodo, ruta, strings.NewReader(string(datos)))
+	peticion.Header.Set("Content-Type", "application/json")
+	if usuario != "" {
+		peticion.Header.Set(cabeceraUsuario, usuario)
+	}
+	grabador := httptest.NewRecorder()
+	manejador.ServeHTTP(grabador, peticion)
+	return grabador
 }
 
 func decodificarError(t *testing.T, grabador *httptest.ResponseRecorder) (errorRespuesta, map[string]any) {
@@ -603,12 +656,12 @@ func TestRutasDesconocidasMantienenFormatoDeError(t *testing.T) {
 		t.Fatalf("respuesta = %+v detalle = %v", respuesta, detalle)
 	}
 
-	grabador = solicitar(manejador, http.MethodDelete, "/rutas/ruta-1a2b3c4d5e6f7a8b", "", "", "")
+	grabador = solicitar(manejador, http.MethodPatch, "/rutas/ruta-1a2b3c4d5e6f7a8b", "", "", "")
 	if grabador.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("método no permitido: estado = %d", grabador.Code)
 	}
 	respuesta, detalle = decodificarError(t, grabador)
-	if respuesta.Codigo != codigoSolicitudInvalida || detalle["metodo"] != http.MethodDelete {
+	if respuesta.Codigo != codigoSolicitudInvalida || detalle["metodo"] != http.MethodPatch {
 		t.Fatalf("respuesta = %+v detalle = %v", respuesta, detalle)
 	}
 }
@@ -620,5 +673,421 @@ func TestHealthRutasCrud(t *testing.T) {
 	}
 	if !bytes.Contains(grabador.Body.Bytes(), []byte(`"service":"rutas-crud"`)) {
 		t.Fatalf("cuerpo = %s", grabador.Body.String())
+	}
+}
+
+func TestListarRutas(t *testing.T) {
+	esperada := rutaEjemplo()
+	var capturado rutas.FiltroListado
+	almacen := &almacenFalso{listar: func(_ context.Context, filtro rutas.FiltroListado) (rutas.Listado, error) {
+		capturado = filtro
+		return rutas.Listado{Items: []rutas.Ruta{esperada}, Total: 7}, nil
+	}}
+
+	grabador := solicitar(RouterRutas(almacen), http.MethodGet,
+		"/rutas?conductorId=usr-12&estado=abierta&desde=2030-01-15T00:00:00Z&hasta=2030-01-16T00:00:00-05:00&limit=5&offset=10",
+		"", "", "req-listado")
+
+	if grabador.Code != http.StatusOK {
+		t.Fatalf("estado = %d: %s", grabador.Code, grabador.Body.String())
+	}
+	if grabador.Header().Get(cabeceraRequestID) != "req-listado" {
+		t.Fatal("no se propagó X-Request-Id")
+	}
+	var cuerpo struct {
+		Items  []rutas.Ruta `json:"items"`
+		Total  int64        `json:"total"`
+		Limit  int          `json:"limit"`
+		Offset int          `json:"offset"`
+	}
+	if err := json.Unmarshal(grabador.Body.Bytes(), &cuerpo); err != nil {
+		t.Fatalf("decodificar el listado: %v (%s)", err, grabador.Body.String())
+	}
+	if cuerpo.Total != 7 || cuerpo.Limit != 5 || cuerpo.Offset != 10 || len(cuerpo.Items) != 1 {
+		t.Fatalf("cuerpo inesperado: %+v", cuerpo)
+	}
+	if cuerpo.Items[0].ID != esperada.ID {
+		t.Fatalf("item inesperado: %+v", cuerpo.Items[0])
+	}
+
+	if capturado.ConductorID != "usr-12" || capturado.Estado != rutas.Abierta {
+		t.Fatalf("filtro inesperado: %+v", capturado)
+	}
+	desde, _ := time.Parse(time.RFC3339, "2030-01-15T00:00:00Z")
+	hasta, _ := time.Parse(time.RFC3339, "2030-01-16T05:00:00Z")
+	if !capturado.Desde.Equal(desde) || !capturado.Hasta.Equal(hasta) {
+		t.Fatalf("ventana inesperada: %v - %v", capturado.Desde, capturado.Hasta)
+	}
+	if capturado.Desde.Location() != time.UTC || capturado.Hasta.Location() != time.UTC {
+		t.Fatalf("la ventana no se normalizó a UTC: %v - %v", capturado.Desde, capturado.Hasta)
+	}
+}
+
+func TestListarRutasPorDefecto(t *testing.T) {
+	var capturado rutas.FiltroListado
+	almacen := &almacenFalso{listar: func(_ context.Context, filtro rutas.FiltroListado) (rutas.Listado, error) {
+		capturado = filtro
+		return rutas.Listado{}, nil
+	}}
+
+	grabador := solicitar(RouterRutas(almacen), http.MethodGet, "/rutas", "", "", "")
+	if grabador.Code != http.StatusOK {
+		t.Fatalf("estado = %d: %s", grabador.Code, grabador.Body.String())
+	}
+	if capturado.Limit != rutas.LimitPorDefecto || capturado.Offset != 0 || capturado.ConductorID != "" || capturado.Estado != "" {
+		t.Fatalf("filtro por defecto inesperado: %+v", capturado)
+	}
+	if !strings.Contains(grabador.Body.String(), `"items":[]`) {
+		t.Fatalf("items debe serializarse como lista vacía: %s", grabador.Body.String())
+	}
+}
+
+func TestListarRutasRechazaConsultaInvalida(t *testing.T) {
+	casos := []struct {
+		nombre   string
+		consulta string
+		campo    string
+	}{
+		{"estado desconocido", "estado=rara", "estado"},
+		{"limit cero", "limit=0", "limit"},
+		{"limit máximo excedido", "limit=101", "limit"},
+		{"limit no entero", "limit=abc", "limit"},
+		{"offset negativo", "offset=-1", "offset"},
+		{"desde con formato inválido", "desde=ayer", "desde"},
+		{"hasta con formato inválido", "hasta=2030-01-15", "hasta"},
+		{"ventana invertida", "desde=2030-01-16T00:00:00Z&hasta=2030-01-15T00:00:00Z", "desde"},
+		{"conductor vacío", "conductorId=%20", "conductorId"},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			llamado := false
+			almacen := &almacenFalso{listar: func(context.Context, rutas.FiltroListado) (rutas.Listado, error) {
+				llamado = true
+				return rutas.Listado{}, nil
+			}}
+			grabador := solicitar(RouterRutas(almacen), http.MethodGet, "/rutas?"+caso.consulta, "", "", "")
+			if grabador.Code != http.StatusBadRequest {
+				t.Fatalf("estado = %d, se esperaba 400: %s", grabador.Code, grabador.Body.String())
+			}
+			respuesta, detalle := decodificarError(t, grabador)
+			if respuesta.Codigo != codigoSolicitudInvalida {
+				t.Fatalf("codigo = %q", respuesta.Codigo)
+			}
+			if campo, _ := detalle["campo"].(string); campo != caso.campo {
+				t.Fatalf("detalle.campo = %q, se esperaba %q (%v)", campo, caso.campo, detalle)
+			}
+			if llamado {
+				t.Fatal("no se debe consultar el almacén con una consulta inválida")
+			}
+		})
+	}
+}
+
+func TestActualizarRuta(t *testing.T) {
+	esperada := rutaEjemplo()
+	esperada.CuposTotales = 4
+	esperada.CuposDisponibles = 4
+	esperada.PrecioTotal = 14000
+	var (
+		idRecibido        string
+		identidadRecibida string
+		cambiosRecibidos  rutas.ActualizarRuta
+	)
+	almacen := &almacenFalso{actualizar: func(_ context.Context, id string, cambios rutas.ActualizarRuta, identidad string) (rutas.Ruta, error) {
+		idRecibido = id
+		identidadRecibida = identidad
+		cambiosRecibidos = cambios
+		return esperada, nil
+	}}
+
+	grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodPut,
+		"/rutas/"+esperada.ID, cuerpoActualizacion(), "usr-12")
+
+	if grabador.Code != http.StatusOK {
+		t.Fatalf("estado = %d: %s", grabador.Code, grabador.Body.String())
+	}
+	if idRecibido != esperada.ID || identidadRecibida != "usr-12" {
+		t.Fatalf("id = %q, identidad = %q", idRecibido, identidadRecibida)
+	}
+	if cambiosRecibidos.CuposTotales != 4 || cambiosRecibidos.PrecioTotal != 14000 {
+		t.Fatalf("cambios inesperados: %+v", cambiosRecibidos)
+	}
+	if cambiosRecibidos.Origen.Nombre != "Chapinero" || len(cambiosRecibidos.Trazado.Coordinates) != 3 {
+		t.Fatalf("geometría inesperada: %+v", cambiosRecibidos)
+	}
+	var cuerpo rutas.Ruta
+	if err := json.Unmarshal(grabador.Body.Bytes(), &cuerpo); err != nil {
+		t.Fatalf("decodificar la ruta: %v", err)
+	}
+	if cuerpo.ID != esperada.ID || cuerpo.CuposTotales != 4 {
+		t.Fatalf("cuerpo inesperado: %+v", cuerpo)
+	}
+}
+
+func TestActualizarRutaRechazaEntradasInvalidas(t *testing.T) {
+	casos := []struct {
+		nombre    string
+		modificar func(map[string]any)
+		campo     string
+	}{
+		{"sin cupos", func(m map[string]any) { delete(m, "cuposTotales") }, "cuposTotales"},
+		{"cupos cero", func(m map[string]any) { m["cuposTotales"] = 0 }, "cuposTotales"},
+		{"siete cupos", func(m map[string]any) { m["cuposTotales"] = 7 }, "cuposTotales"},
+		{"sin precio", func(m map[string]any) { delete(m, "precioTotal") }, "precioTotal"},
+		{"precio negativo", func(m map[string]any) { m["precioTotal"] = -1 }, "precioTotal"},
+		{"salida pasada", func(m map[string]any) {
+			m["salida"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+		}, "salida"},
+		{"salida inválida", func(m map[string]any) { m["salida"] = "mañana" }, "salida"},
+		{"trazado de un punto", func(m map[string]any) {
+			m["trazado"].(map[string]any)["coordinates"] = [][]float64{{-74.0645, 4.6486}}
+		}, "trazado.coordinates"},
+		{"longitud fuera de rango", func(m map[string]any) {
+			m["origen"].(map[string]any)["punto"].(map[string]any)["coordinates"] = []float64{181, 4.6486}
+		}, "origen.punto.coordinates"},
+		{"conductorId no editable", func(m map[string]any) { m["conductorId"] = "usr-01" }, "cuerpo"},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			llamado := false
+			almacen := &almacenFalso{actualizar: func(context.Context, string, rutas.ActualizarRuta, string) (rutas.Ruta, error) {
+				llamado = true
+				return rutas.Ruta{}, nil
+			}}
+			cuerpo := cuerpoActualizacion()
+			caso.modificar(cuerpo)
+			grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodPut,
+				"/rutas/ruta-1a2b3c4d5e6f7a8b", cuerpo, "usr-12")
+
+			if grabador.Code != http.StatusBadRequest {
+				t.Fatalf("estado = %d, se esperaba 400: %s", grabador.Code, grabador.Body.String())
+			}
+			respuesta, detalle := decodificarError(t, grabador)
+			if respuesta.Codigo != codigoSolicitudInvalida {
+				t.Fatalf("codigo = %q", respuesta.Codigo)
+			}
+			if campo, _ := detalle["campo"].(string); campo != caso.campo {
+				t.Fatalf("detalle.campo = %q, se esperaba %q (%v)", campo, caso.campo, detalle)
+			}
+			if llamado {
+				t.Fatal("no se debe llamar al almacén con una entrada inválida")
+			}
+		})
+	}
+}
+
+func TestActualizarRutaExigeIdentidad(t *testing.T) {
+	llamado := false
+	almacen := &almacenFalso{actualizar: func(context.Context, string, rutas.ActualizarRuta, string) (rutas.Ruta, error) {
+		llamado = true
+		return rutas.Ruta{}, nil
+	}}
+	grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodPut,
+		"/rutas/ruta-1a2b3c4d5e6f7a8b", cuerpoActualizacion(), "")
+
+	if grabador.Code != http.StatusForbidden {
+		t.Fatalf("estado = %d, se esperaba 403: %s", grabador.Code, grabador.Body.String())
+	}
+	respuesta, detalle := decodificarError(t, grabador)
+	if respuesta.Codigo != codigoNoAutorizado {
+		t.Fatalf("codigo = %q", respuesta.Codigo)
+	}
+	if detalle["rutaId"] != "ruta-1a2b3c4d5e6f7a8b" {
+		t.Fatalf("detalle = %v", detalle)
+	}
+	if llamado {
+		t.Fatal("no se debe llamar al almacén sin identidad")
+	}
+}
+
+func TestActualizarRutaClasificaFallosDelAlmacen(t *testing.T) {
+	casos := []struct {
+		nombre string
+		err    error
+		estado int
+		codigo string
+	}{
+		{"inexistente", rutas.ErrNoEncontrada, http.StatusNotFound, codigoNoEncontrada},
+		{"ajena", rutas.ErrNoAutorizado, http.StatusForbidden, codigoNoAutorizado},
+		{"cerrada", rutas.ErrRutaCerrada, http.StatusConflict, codigoRutaCerrada},
+		{"comprometidos", rutas.ErrReservasActivas, http.StatusConflict, codigoReservasActivas},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			almacen := &almacenFalso{actualizar: func(context.Context, string, rutas.ActualizarRuta, string) (rutas.Ruta, error) {
+				return rutas.Ruta{}, caso.err
+			}}
+			grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodPut,
+				"/rutas/ruta-1a2b3c4d5e6f7a8b", cuerpoActualizacion(), "usr-01")
+			if grabador.Code != caso.estado {
+				t.Fatalf("estado = %d, se esperaba %d: %s", grabador.Code, caso.estado, grabador.Body.String())
+			}
+			respuesta, detalle := decodificarError(t, grabador)
+			if respuesta.Codigo != caso.codigo {
+				t.Fatalf("codigo = %q, se esperaba %q", respuesta.Codigo, caso.codigo)
+			}
+			if detalle["rutaId"] != "ruta-1a2b3c4d5e6f7a8b" {
+				t.Fatalf("detalle = %v", detalle)
+			}
+		})
+	}
+
+	t.Run("fallo interno", func(t *testing.T) {
+		almacen := &almacenFalso{actualizar: func(context.Context, string, rutas.ActualizarRuta, string) (rutas.Ruta, error) {
+			return rutas.Ruta{}, errors.New("mongo caído")
+		}}
+		grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodPut,
+			"/rutas/ruta-1a2b3c4d5e6f7a8b", cuerpoActualizacion(), "usr-12")
+		if grabador.Code != http.StatusInternalServerError {
+			t.Fatalf("estado = %d", grabador.Code)
+		}
+		if strings.Contains(grabador.Body.String(), "mongo caído") {
+			t.Fatal("la respuesta interna no debe exponer la causa")
+		}
+	})
+}
+
+func TestCerrarRutaResponde204(t *testing.T) {
+	var (
+		idRecibido        string
+		identidadRecibida string
+	)
+	almacen := &almacenFalso{cerrar: func(_ context.Context, id, identidad string) error {
+		idRecibido = id
+		identidadRecibida = identidad
+		return nil
+	}}
+	grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodDelete,
+		"/rutas/ruta-1a2b3c4d5e6f7a8b", nil, "usr-12")
+
+	if grabador.Code != http.StatusNoContent {
+		t.Fatalf("estado = %d: %s", grabador.Code, grabador.Body.String())
+	}
+	if grabador.Body.Len() != 0 {
+		t.Fatalf("204 no debe llevar cuerpo: %s", grabador.Body.String())
+	}
+	if grabador.Header().Get(cabeceraRequestID) == "" {
+		t.Fatal("falta X-Request-Id")
+	}
+	if idRecibido != "ruta-1a2b3c4d5e6f7a8b" || identidadRecibida != "usr-12" {
+		t.Fatalf("id = %q, identidad = %q", idRecibido, identidadRecibida)
+	}
+}
+
+func TestCerrarRutaExigeIdentidad(t *testing.T) {
+	llamado := false
+	almacen := &almacenFalso{cerrar: func(context.Context, string, string) error {
+		llamado = true
+		return nil
+	}}
+	grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodDelete,
+		"/rutas/ruta-1a2b3c4d5e6f7a8b", nil, "")
+
+	if grabador.Code != http.StatusForbidden {
+		t.Fatalf("estado = %d, se esperaba 403", grabador.Code)
+	}
+	respuesta, _ := decodificarError(t, grabador)
+	if respuesta.Codigo != codigoNoAutorizado {
+		t.Fatalf("codigo = %q", respuesta.Codigo)
+	}
+	if llamado {
+		t.Fatal("no se debe llamar al almacén sin identidad")
+	}
+}
+
+func TestCerrarRutaClasificaFallosDelAlmacen(t *testing.T) {
+	casos := []struct {
+		nombre string
+		err    error
+		estado int
+		codigo string
+	}{
+		{"inexistente", rutas.ErrNoEncontrada, http.StatusNotFound, codigoNoEncontrada},
+		{"ajena", rutas.ErrNoAutorizado, http.StatusForbidden, codigoNoAutorizado},
+		{"comprometidos", rutas.ErrReservasActivas, http.StatusConflict, codigoReservasActivas},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			almacen := &almacenFalso{cerrar: func(context.Context, string, string) error {
+				return caso.err
+			}}
+			grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodDelete,
+				"/rutas/ruta-1a2b3c4d5e6f7a8b", nil, "usr-01")
+			if grabador.Code != caso.estado {
+				t.Fatalf("estado = %d, se esperaba %d: %s", grabador.Code, caso.estado, grabador.Body.String())
+			}
+			respuesta, _ := decodificarError(t, grabador)
+			if respuesta.Codigo != caso.codigo {
+				t.Fatalf("codigo = %q, se esperaba %q", respuesta.Codigo, caso.codigo)
+			}
+		})
+	}
+}
+
+func TestCerrarRutaCerradaEsIdempotente(t *testing.T) {
+	almacen := &almacenFalso{cerrar: func(context.Context, string, string) error {
+		// El repositorio devuelve éxito cuando la ruta ya estaba cerrada.
+		return nil
+	}}
+	manejador := RouterRutas(almacen)
+	for intento := 0; intento < 2; intento++ {
+		grabador := solicitarConUsuario(t, manejador, http.MethodDelete,
+			"/rutas/ruta-1a2b3c4d5e6f7a8b", nil, "usr-12")
+		if grabador.Code != http.StatusNoContent || grabador.Body.Len() != 0 {
+			t.Fatalf("intento %d: estado = %d cuerpo = %s", intento, grabador.Code, grabador.Body.String())
+		}
+	}
+}
+
+func TestCrearRutaConCabeceraAjena(t *testing.T) {
+	llamado := false
+	almacen := &almacenFalso{crear: func(context.Context, rutas.Ruta) error {
+		llamado = true
+		return nil
+	}}
+	grabador := solicitarConUsuario(t, RouterRutas(almacen), http.MethodPost, "/rutas", cuerpoCreacion(), "usr-01")
+
+	if grabador.Code != http.StatusForbidden {
+		t.Fatalf("estado = %d, se esperaba 403: %s", grabador.Code, grabador.Body.String())
+	}
+	respuesta, _ := decodificarError(t, grabador)
+	if respuesta.Codigo != codigoNoAutorizado {
+		t.Fatalf("codigo = %q", respuesta.Codigo)
+	}
+	if llamado {
+		t.Fatal("no se debe guardar una ruta con identidad ajena")
+	}
+
+	grabador = solicitarConUsuario(t, RouterRutas(almacen), http.MethodPost, "/rutas", cuerpoCreacion(), "usr-12")
+	if grabador.Code != http.StatusCreated {
+		t.Fatalf("cabecera propia: estado = %d: %s", grabador.Code, grabador.Body.String())
+	}
+}
+
+func TestSecretoGatewayProtegeElRouter(t *testing.T) {
+	t.Setenv("GATEWAY_SECRET", "secreto-de-prueba")
+	almacen := &almacenFalso{}
+	manejador := RouterRutas(almacen)
+
+	grabador := solicitar(manejador, http.MethodGet, "/rutas", "", "", "")
+	if grabador.Code != http.StatusUnauthorized {
+		t.Fatalf("sin secreto: estado = %d, se esperaba 401", grabador.Code)
+	}
+	respuesta, _ := decodificarError(t, grabador)
+	if respuesta.Codigo != codigoNoAutorizado {
+		t.Fatalf("codigo = %q", respuesta.Codigo)
+	}
+
+	peticion := httptest.NewRequest(http.MethodGet, "/rutas", nil)
+	peticion.Header.Set(cabeceraSecreto, "secreto-de-prueba")
+	grabador = httptest.NewRecorder()
+	manejador.ServeHTTP(grabador, peticion)
+	if grabador.Code != http.StatusOK {
+		t.Fatalf("con secreto: estado = %d: %s", grabador.Code, grabador.Body.String())
+	}
+
+	grabador = solicitar(manejador, http.MethodGet, "/health", "", "", "")
+	if grabador.Code != http.StatusOK {
+		t.Fatalf("health sin secreto: estado = %d", grabador.Code)
 	}
 }
