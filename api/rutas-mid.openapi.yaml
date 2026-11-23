@@ -1,22 +1,35 @@
 openapi: 3.0.3
 info:
   title: Súbete · rutas-mid
-  version: 0.1.1
+  version: 0.2.0
   description: |
-    MID de rutas del grupo A. Este contrato publica la salud del proceso y
-    reserva el espacio para la búsqueda de rutas compatibles y el panel del
-    conductor, que llegan en la siguiente entrega.
+    MID de rutas del grupo A. Busca rutas compatibles para un pasajero y arma
+    el panel de ocupación de un conductor.
+
+    El MID no accede a MongoDB: consulta el CRUD por HTTP y consume el puntaje
+    del conductor por el gateway. Las reglas geográficas y el ranking viven en
+    el MID y se prueban sin HTTP ni base de datos.
+
+    Configuración provisional, pendiente de acuerdo con el clúster:
+    `RUTAS_CRUD_URL` (por defecto `http://127.0.0.1:8081`), `REPUTACION_URL`
+    (por defecto `http://127.0.0.1:8083`), `RADIO_M` (800), los plazos de cada
+    cliente y `GATEWAY_SECRET` para exigir `X-Cluster-Secret`. El nombre de la
+    cabecera de identidad y la del secreto se confirman con el líder del
+    gateway.
 
     Es ejecutable desde el visor OpenAPI: levanta el proceso, abre una
     operación y usa `Try it out`. El visor corre por defecto en
     `http://127.0.0.1:8090` y el MID autoriza ese origen por CORS (configurable
-    con `CORS_ORIGINS`). Las operaciones que se agreguen deben mantener el
-    mismo formato de error del clúster y las reglas de la propuesta del grupo A.
+    con `CORS_ORIGINS`). Las operaciones que necesitan reputación requieren que
+    el servicio de Pasajeros y reputación, o un doble, responda en
+    `REPUTACION_URL`.
 servers:
   - url: http://127.0.0.1:8082
     description: Proceso local del MID, usado por el visor OpenAPI
 tags:
   - name: salud
+  - name: busqueda
+  - name: conductores
 paths:
   /health:
     get:
@@ -41,9 +54,448 @@ paths:
                   service:
                     type: string
                     enum: [rutas-mid]
+  /rutas/compatibles:
+    get:
+      operationId: buscarRutasCompatibles
+      tags: [busqueda]
+      summary: Busca rutas que sirven a un origen y destino en una ventana
+      description: |
+        Devuelve las rutas `abiertas` con cupos cuya salida cae entre `desde` y
+        `hasta` y cuyo trazado pasa a menos de `RADIO_M` metros del origen y del
+        destino del pasajero. El punto más cercano al origen debe aparecer
+        antes que el más cercano al destino sobre el trazado; si no, el viaje
+        va en sentido contrario y la ruta se descarta.
+
+        Las distancias se calculan en metros proyectando cada punto sobre los
+        segmentos del `LineString`. El campo `puntaje` de cada coincidencia es
+        el valor usado para ordenar:
+        `(distanciaOrigenM + distanciaDestinoM) / 100 - puntajeConductor * 2`.
+        Se ordena de menor a mayor y se desempata por `ruta.id` ascendente.
+        `puntajeConductor` e `insignia` son la reputación consultada al
+        servicio de Pasajeros y reputación.
+
+        Se excluyen los conductores con insignia `en_observacion` y los
+        candidatos cuyo perfil responde 404. Si la reputación requerida no está
+        disponible (timeout, 5xx o respuesta inválida), responde 503
+        `dependencia_no_disponible` en lugar de calcular un ranking incompleto.
+        Sin candidatos responde 200 con lista vacía y no consulta reputación.
+      parameters:
+        - name: origenLat
+          in: query
+          required: true
+          description: Latitud del origen del pasajero, entre -90 y 90
+          schema:
+            type: number
+            minimum: -90
+            maximum: 90
+            example: 4.6486
+        - name: origenLng
+          in: query
+          required: true
+          description: Longitud del origen del pasajero, entre -180 y 180
+          schema:
+            type: number
+            minimum: -180
+            maximum: 180
+            example: -74.0645
+        - name: destinoLat
+          in: query
+          required: true
+          description: Latitud del destino del pasajero, entre -90 y 90
+          schema:
+            type: number
+            minimum: -90
+            maximum: 90
+            example: 4.7012
+        - name: destinoLng
+          in: query
+          required: true
+          description: Longitud del destino del pasajero, entre -180 y 180
+          schema:
+            type: number
+            minimum: -180
+            maximum: 180
+            example: -74.0415
+        - name: desde
+          in: query
+          required: true
+          description: Inicio de la ventana de salida, en RFC3339
+          schema:
+            type: string
+            format: date-time
+            example: '2030-01-15T06:00:00Z'
+        - name: hasta
+          in: query
+          required: true
+          description: Fin de la ventana de salida, en RFC3339; debe ser posterior a `desde`
+          schema:
+            type: string
+            format: date-time
+            example: '2030-01-15T09:00:00Z'
+      responses:
+        '200':
+          description: Rutas compatibles ordenadas, o lista vacía
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultadoBusqueda'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '401':
+          $ref: '#/components/responses/NoAutorizado'
+        '503':
+          $ref: '#/components/responses/DependenciaNoDisponible'
+        '500':
+          $ref: '#/components/responses/ErrorInterno'
+  /conductores/{id}/panel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Identificador del conductor
+        schema:
+          type: string
+          minLength: 1
+          example: usr-12
+    get:
+      operationId: obtenerPanelConductor
+      tags: [conductores]
+      summary: Devuelve ocupación y reputación de un conductor
+      description: |
+        Consulta el puntaje del conductor y lista todas sus rutas, en cualquier
+        estado, con los cupos ocupados calculados como
+        `cuposTotales - cuposDisponibles`.
+
+        Si el perfil del conductor no existe responde 404 `no_encontrada`. Si
+        el perfil existe y no tiene rutas responde 200 con `rutas` vacía. Si la
+        reputación o el CRUD no están disponibles responde 503
+        `dependencia_no_disponible`; no devuelve un panel incompleto.
+      responses:
+        '200':
+          description: Panel del conductor
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelConductor'
+        '401':
+          $ref: '#/components/responses/NoAutorizado'
+        '404':
+          description: El perfil del conductor no existe
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                codigo: no_encontrada
+                mensaje: El perfil del conductor no existe
+                detalle:
+                  conductorId: usr-99
+        '503':
+          $ref: '#/components/responses/DependenciaNoDisponible'
+        '500':
+          $ref: '#/components/responses/ErrorInterno'
 components:
   headers:
     X-Request-Id:
       description: Identificador de la solicitud, propio o generado por el servidor
       schema:
         type: string
+  responses:
+    SolicitudInvalida:
+      description: Parámetros de consulta inválidos o ausentes
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: solicitud_invalida
+            mensaje: 'hasta debe ser posterior a desde'
+            detalle:
+              campo: hasta
+    NoAutorizado:
+      description: Falta la cabecera secreta del gateway o no coincide
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: no_autorizado
+            mensaje: Falta la cabecera secreta del gateway o no coincide
+            detalle: {}
+    DependenciaNoDisponible:
+      description: |
+        Una dependencia necesaria para calcular la respuesta no está
+        disponible. `detalle.servicio` indica cuál: `rutas-crud` o
+        `reputacion`.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            reputacion:
+              value:
+                codigo: dependencia_no_disponible
+                mensaje: El servicio de reputación no está disponible
+                detalle:
+                  servicio: reputacion
+    ErrorInterno:
+      description: Fallo inesperado del servidor
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: error_interno
+            mensaje: No fue posible completar la solicitud
+            detalle: {}
+  schemas:
+    Ruta:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - conductorId
+        - origen
+        - destino
+        - trazado
+        - salida
+        - cuposTotales
+        - cuposDisponibles
+        - precioTotal
+        - estado
+      properties:
+        id:
+          type: string
+          pattern: '^ruta-[a-z0-9]+$'
+          example: ruta-1a2b3c4d5e6f7a8b
+        conductorId:
+          type: string
+          minLength: 1
+          example: usr-12
+        origen:
+          $ref: '#/components/schemas/Lugar'
+        destino:
+          $ref: '#/components/schemas/Lugar'
+        trazado:
+          $ref: '#/components/schemas/LineString'
+        salida:
+          type: string
+          format: date-time
+          description: Fecha de salida en UTC
+          example: '2030-01-15T06:30:00Z'
+        cuposTotales:
+          type: integer
+          minimum: 1
+          maximum: 6
+          example: 3
+        cuposDisponibles:
+          type: integer
+          minimum: 0
+          maximum: 6
+          example: 3
+        precioTotal:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 12000
+        estado:
+          type: string
+          enum: [abierta, llena, cerrada]
+    ResultadoBusqueda:
+      type: object
+      additionalProperties: false
+      required: [items, radioM]
+      properties:
+        radioM:
+          type: number
+          description: Radio máximo usado para aceptar origen y destino
+          example: 800
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Coincidencia'
+    Coincidencia:
+      type: object
+      additionalProperties: false
+      required:
+        - ruta
+        - distanciaOrigenM
+        - distanciaDestinoM
+        - puntaje
+        - puntajeConductor
+        - insignia
+      properties:
+        ruta:
+          $ref: '#/components/schemas/Ruta'
+        distanciaOrigenM:
+          type: number
+          minimum: 0
+          description: Distancia en metros del origen del pasajero al trazado
+          example: 120.5
+        distanciaDestinoM:
+          type: number
+          minimum: 0
+          description: Distancia en metros del destino del pasajero al trazado
+          example: 86.2
+        puntaje:
+          type: number
+          description: |
+            Valor de ordenamiento:
+            `(distanciaOrigenM + distanciaDestinoM) / 100 - puntajeConductor * 2`.
+            Menor es mejor.
+          example: -7.4
+        puntajeConductor:
+          type: number
+          minimum: 0
+          maximum: 5
+          description: Puntaje de reputación del conductor
+          example: 4.7
+        insignia:
+          type: string
+          enum: [nuevo, confiable, regular, en_observacion]
+          description: Insignia del conductor; las rutas con `en_observacion` se excluyen
+          example: confiable
+    PanelConductor:
+      type: object
+      additionalProperties: false
+      required: [conductorId, puntaje, insignia, rutas]
+      properties:
+        conductorId:
+          type: string
+          example: usr-12
+        puntaje:
+          type: number
+          minimum: 0
+          maximum: 5
+          example: 4.7
+        insignia:
+          type: string
+          enum: [nuevo, confiable, regular, en_observacion]
+          example: confiable
+        viajesCompletados:
+          type: integer
+          minimum: 0
+          description: Copiado del perfil si el proveedor lo devuelve
+          example: 12
+        tasaCancelacion:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Copiada del perfil si el proveedor la devuelve
+          example: 0.05
+        totalCalificaciones:
+          type: integer
+          minimum: 0
+          description: Copiado del perfil si el proveedor lo devuelve
+          example: 9
+        rutas:
+          type: array
+          items:
+            $ref: '#/components/schemas/RutaConOcupacion'
+    RutaConOcupacion:
+      type: object
+      additionalProperties: false
+      required: [ruta, ocupados]
+      properties:
+        ruta:
+          $ref: '#/components/schemas/Ruta'
+        ocupados:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 'Cupos comprometidos: cuposTotales - cuposDisponibles'
+          example: 2
+    Lugar:
+      type: object
+      additionalProperties: false
+      required: [nombre, punto]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          example: Chapinero
+        punto:
+          $ref: '#/components/schemas/Point'
+    Point:
+      type: object
+      additionalProperties: false
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [Point]
+        coordinates:
+          type: array
+          description: 'Orden GeoJSON: [longitud, latitud]. Longitud entre -180 y 180; latitud entre -90 y 90.'
+          minItems: 2
+          maxItems: 2
+          items:
+            type: number
+          example: [-74.0645, 4.6486]
+    LineString:
+      type: object
+      additionalProperties: false
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [LineString]
+        coordinates:
+          type: array
+          description: 'Orden GeoJSON: cada posición es [longitud, latitud], con longitud entre -180 y 180 y latitud entre -90 y 90.'
+          minItems: 2
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              type: number
+          example:
+            - [-74.0645, 4.6486]
+            - [-74.0600, 4.6650]
+            - [-74.0415, 4.7012]
+    Error:
+      type: object
+      additionalProperties: false
+      required: [codigo, mensaje, detalle]
+      properties:
+        codigo:
+          type: string
+          description: Código estable para clientes
+          enum:
+            - solicitud_invalida
+            - no_encontrada
+            - no_autorizado
+            - dependencia_no_disponible
+            - error_interno
+          example: dependencia_no_disponible
+        mensaje:
+          type: string
+          example: El servicio de reputación no está disponible
+        detalle:
+          type: object
+          additionalProperties: true
+          description: Contexto del error; nunca incluye tokens ni datos de pasajeros
+          example:
+            servicio: reputacion

@@ -1,13 +1,13 @@
 openapi: 3.0.3
 info:
   title: Súbete · rutas-crud
-  version: 0.2.1
+  version: 0.3.0
   description: |
     CRUD de rutas del grupo A. Es el único dueño de MongoDB.
 
-    Hito 1: publicar una ruta, consultarla y descontar o devolver cupos de
-    forma atómica. Los puntos geográficos usan el orden de GeoJSON
-    `[longitud, latitud]` y las fechas de salida se guardan y devuelven en UTC.
+    Publica, lista, edita, cierra y ajusta cupos de rutas. Los puntos
+    geográficos usan el orden de GeoJSON `[longitud, latitud]` y las fechas de
+    salida se guardan y devuelven en UTC.
 
     El contrato es ejecutable desde el visor OpenAPI: levanta MongoDB y el
     proceso, abre una operación y usa `Try it out`. El visor corre por defecto
@@ -15,9 +15,16 @@ info:
     (configurable con `CORS_ORIGINS`); las fechas de los ejemplos son futuras
     para que `POST /rutas` funcione sin editarlas.
 
-    Pendiente con el gateway: nombre de la cabecera de confianza, identidad del
-    conductor y scopes. Mientras no exista ese acuerdo, `conductorId` viaja en el
-    cuerpo de `POST /rutas` y la API no aplica autorización de propietario.
+    Identidad y gateway (provisional, pendiente de acuerdo con el clúster):
+    las operaciones de edición y cierre leen la identidad de la cabecera
+    `X-Usuario-Id` y exigen que coincida con `conductorId`. Si el proceso
+    define `GATEWAY_SECRET`, toda petición distinta de `/health` debe traer
+    `X-Cluster-Secret`. Mientras esos acuerdos no existan, `POST /rutas` sigue
+    aceptando `conductorId` en el cuerpo y la comprobación del secreto está
+    desactivada por defecto.
+
+    Idempotencia de cupos: queda pendiente con Reservas. El contrato actual
+    mantiene `delta` y no acepta todavía una clave de idempotencia.
 servers:
   - url: http://127.0.0.1:8081
     description: Proceso local del CRUD, usado por el visor OpenAPI
@@ -46,6 +53,81 @@ paths:
                     type: string
                     enum: [rutas-crud]
   /rutas:
+    get:
+      operationId: listarRutas
+      tags: [rutas]
+      summary: Lista rutas con filtros y paginación
+      description: |
+        Devuelve las rutas ordenadas por `salida` ascendente y, ante empate,
+        por `id` ascendente. `desde` y `hasta` son inclusivos y se interpretan
+        en UTC. Sin filtros devuelve la primera página de todas las rutas.
+
+        El MID de rutas usa esta operación con `estado=abierta` y la ventana de
+        salida para preseleccionar candidatas; el panel del conductor la usa
+        con `conductorId`.
+      parameters:
+        - name: conductorId
+          in: query
+          required: false
+          description: Filtra por conductor propietario
+          schema:
+            type: string
+            minLength: 1
+            example: usr-12
+        - name: estado
+          in: query
+          required: false
+          description: Filtra por estado publicado
+          schema:
+            type: string
+            enum: [abierta, llena, cerrada]
+        - name: desde
+          in: query
+          required: false
+          description: Salida mayor o igual a este instante, en RFC3339
+          schema:
+            type: string
+            format: date-time
+            example: '2030-01-15T00:00:00Z'
+        - name: hasta
+          in: query
+          required: false
+          description: Salida menor o igual a este instante, en RFC3339
+          schema:
+            type: string
+            format: date-time
+            example: '2030-01-16T00:00:00Z'
+        - name: limit
+          in: query
+          required: false
+          description: Tamaño de página; por defecto 20
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          description: Cantidad de rutas a omitir; por defecto 0
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Página de rutas
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListaRutas'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '500':
+          $ref: '#/components/responses/ErrorInterno'
     post:
       operationId: crearRuta
       tags: [rutas]
@@ -58,6 +140,11 @@ paths:
         Rechaza `cuposTotales` fuera de 1 a 6, `precioTotal` negativo, `salida`
         que no sea futura, coordenadas fuera de rango y trazados con menos de
         dos puntos.
+
+        Si la petición trae `X-Usuario-Id`, debe coincidir con `conductorId`;
+        en caso contrario responde 403 `no_autorizado`.
+      parameters:
+        - $ref: '#/components/parameters/UsuarioIdOpcional'
       requestBody:
         required: true
         content:
@@ -102,6 +189,8 @@ paths:
                 $ref: '#/components/schemas/Ruta'
         '400':
           $ref: '#/components/responses/SolicitudInvalida'
+        '403':
+          $ref: '#/components/responses/NoAutorizado'
         '500':
           $ref: '#/components/responses/ErrorInterno'
   /rutas/{id}:
@@ -114,6 +203,9 @@ paths:
       description: |
         Devuelve la ruta indicada. Usa el `id` que devolvió `POST /rutas`
         para encadenar la ejecución desde el visor OpenAPI.
+
+        Es la operación que consume el MID de Reservas con el scope
+        `rutas:leer`.
       responses:
         '200':
           description: Ruta encontrada
@@ -126,6 +218,131 @@ paths:
                 $ref: '#/components/schemas/Ruta'
         '404':
           $ref: '#/components/responses/NoEncontrada'
+        '500':
+          $ref: '#/components/responses/ErrorInterno'
+    put:
+      operationId: actualizarRuta
+      tags: [rutas]
+      summary: Edita una ruta existente
+      description: |
+        Reemplaza los datos editables de la ruta. `conductorId` no se puede
+        cambiar y la identidad de `X-Usuario-Id` debe ser la propietaria.
+
+        Aplica las mismas reglas de `POST /rutas`. Además, el nuevo
+        `cuposTotales` no puede ser menor que los cupos ya comprometidos
+        (`cuposTotales - cuposDisponibles`): en ese caso responde 409
+        `reservas_activas`. Los cupos disponibles se recalculan como
+        `nuevo cuposTotales - cupos comprometidos` y el estado pasa a `llena`
+        si el resultado es cero o a `abierta` en caso contrario.
+
+        Una ruta `cerrada` no se puede editar: responde 409 `ruta_cerrada`.
+        La comprobación de propiedad, estado y cupos comprometidos se aplica en
+        la misma escritura condicional que actualiza el documento.
+      parameters:
+        - $ref: '#/components/parameters/UsuarioId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActualizarRuta'
+            example:
+              origen:
+                nombre: Chapinero
+                punto:
+                  type: Point
+                  coordinates: [-74.0645, 4.6486]
+              destino:
+                nombre: Universidad
+                punto:
+                  type: Point
+                  coordinates: [-74.0415, 4.7012]
+              trazado:
+                type: LineString
+                coordinates:
+                  - [-74.0645, 4.6486]
+                  - [-74.0600, 4.6650]
+                  - [-74.0415, 4.7012]
+              salida: '2030-01-15T07:00:00Z'
+              cuposTotales: 4
+              precioTotal: 14000
+      responses:
+        '200':
+          description: Ruta actualizada
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ruta'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '403':
+          $ref: '#/components/responses/NoAutorizado'
+        '404':
+          $ref: '#/components/responses/NoEncontrada'
+        '409':
+          description: |
+            La edición no se puede aplicar. Códigos: `ruta_cerrada` si la ruta
+            ya está cerrada y `reservas_activas` si el nuevo total de cupos
+            dejaría por debajo los cupos comprometidos.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                reservasActivas:
+                  value:
+                    codigo: reservas_activas
+                    mensaje: La ruta tiene cupos comprometidos por reservas
+                    detalle:
+                      rutaId: ruta-1a2b3c4d5e6f7a8b
+        '500':
+          $ref: '#/components/responses/ErrorInterno'
+    delete:
+      operationId: cerrarRuta
+      tags: [rutas]
+      summary: Cierra lógicamente una ruta
+      description: |
+        Marca la ruta como `cerrada` sin borrar el documento. La identidad de
+        `X-Usuario-Id` debe ser la propietaria.
+
+        Si la ruta tiene cupos comprometidos responde 409 `reservas_activas`:
+        no se puede dejar a pasajeros con una reserva activa sin ruta. Cerrar
+        una ruta ya cerrada es idempotente y responde 204.
+
+        Es la operación que evita que Reservas descuente cupos de una ruta que
+        el conductor dejó de ofrecer.
+      parameters:
+        - $ref: '#/components/parameters/UsuarioId'
+      responses:
+        '204':
+          description: Ruta cerrada
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '403':
+          $ref: '#/components/responses/NoAutorizado'
+        '404':
+          $ref: '#/components/responses/NoEncontrada'
+        '409':
+          description: La ruta tiene cupos comprometidos por reservas
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                codigo: reservas_activas
+                mensaje: La ruta tiene cupos comprometidos por reservas
+                detalle:
+                  rutaId: ruta-1a2b3c4d5e6f7a8b
         '500':
           $ref: '#/components/responses/ErrorInterno'
   /rutas/{id}/cupos:
@@ -149,7 +366,8 @@ paths:
         simultáneas por el último cupo producen un `200` y un `409 sin_cupos`.
 
         Es la operación que consume el MID de Reservas con el scope
-        `rutas:escribir`.
+        `rutas:escribir`. La clave de idempotencia para reintentos sigue
+        pendiente de acuerdo con Reservas.
       requestBody:
         required: true
         content:
@@ -211,9 +429,33 @@ components:
         type: string
         pattern: '^ruta-[a-z0-9]+$'
         example: ruta-1a2b3c4d5e6f7a8b
+    UsuarioId:
+      name: X-Usuario-Id
+      in: header
+      required: true
+      description: |
+        Identidad autenticada del conductor, inyectada por el gateway. Nombre
+        provisional hasta que el clúster acuerde la cabecera definitiva. Debe
+        coincidir con el `conductorId` de la ruta.
+      schema:
+        type: string
+        minLength: 1
+        example: usr-12
+    UsuarioIdOpcional:
+      name: X-Usuario-Id
+      in: header
+      required: false
+      description: |
+        Identidad autenticada del conductor. En `POST /rutas` es opcional
+        mientras el gateway no esté integrado; si llega, debe coincidir con el
+        `conductorId` del cuerpo. Nombre provisional.
+      schema:
+        type: string
+        minLength: 1
+        example: usr-12
   responses:
     SolicitudInvalida:
-      description: Cuerpo o campos inválidos
+      description: Cuerpo, consulta o campos inválidos
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -238,6 +480,23 @@ components:
           example:
             codigo: no_encontrada
             mensaje: La ruta no existe
+            detalle:
+              rutaId: ruta-1a2b3c4d5e6f7a8b
+    NoAutorizado:
+      description: |
+        La identidad no es la propietaria de la ruta o falta la cabecera de
+        identidad. Con `GATEWAY_SECRET` definida, una petición sin
+        `X-Cluster-Secret` válida responde 401 con el mismo código.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: no_autorizado
+            mensaje: La identidad autenticada no es la propietaria de la ruta
             detalle:
               rutaId: ruta-1a2b3c4d5e6f7a8b
     ErrorInterno:
@@ -307,6 +566,28 @@ components:
         estado:
           type: string
           enum: [abierta, llena, cerrada]
+    ListaRutas:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ruta'
+        total:
+          type: integer
+          minimum: 0
+          description: Total de rutas que cumplen los filtros, sin paginar
+          example: 15
+        limit:
+          type: integer
+          minimum: 1
+          example: 20
+        offset:
+          type: integer
+          minimum: 0
+          example: 0
     CrearRuta:
       type: object
       additionalProperties: false
@@ -344,6 +625,39 @@ components:
           format: int64
           minimum: 0
           example: 12000
+    ActualizarRuta:
+      type: object
+      additionalProperties: false
+      required:
+        - origen
+        - destino
+        - trazado
+        - salida
+        - cuposTotales
+        - precioTotal
+      properties:
+        origen:
+          $ref: '#/components/schemas/Lugar'
+        destino:
+          $ref: '#/components/schemas/Lugar'
+        trazado:
+          $ref: '#/components/schemas/LineString'
+        salida:
+          type: string
+          format: date-time
+          description: Debe ser futura. Se normaliza a UTC.
+          example: '2030-01-15T07:00:00Z'
+        cuposTotales:
+          type: integer
+          minimum: 1
+          maximum: 6
+          description: No puede quedar por debajo de los cupos comprometidos.
+          example: 4
+        precioTotal:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 14000
     Lugar:
       type: object
       additionalProperties: false
@@ -420,6 +734,8 @@ components:
             - sin_cupos
             - cupos_excedidos
             - ruta_cerrada
+            - no_autorizado
+            - reservas_activas
             - error_interno
           example: sin_cupos
         mensaje:
