@@ -26,9 +26,10 @@ type ClienteReputacion struct {
 	base *clienteBase
 }
 
-// NuevoClienteReputacion construye el cliente de reputación.
-func NuevoClienteReputacion(baseURL string, plazo time.Duration, secreto string) (*ClienteReputacion, error) {
-	base, err := nuevoClienteBase("reputación", baseURL, plazo, secreto)
+// NuevoClienteReputacion construye el cliente de reputación. secreto es el
+// valor de GATEWAY_SECRET y token el token de servicio opcional.
+func NuevoClienteReputacion(baseURL string, plazo time.Duration, secreto, token string) (*ClienteReputacion, error) {
+	base, err := nuevoClienteBase("reputación", baseURL, plazo, secreto, token)
 	if err != nil {
 		return nil, err
 	}
@@ -51,9 +52,15 @@ type respuestaPuntaje struct {
 // (búsqueda) o responda 404 (panel). Cualquier otro fallo, un JSON inválido o
 // campos fuera del contrato se traducen en ErrNoDisponible.
 func (c *ClienteReputacion) Puntaje(ctx context.Context, conductorID string) (Reputacion, error) {
+	// El identificador se inserta como un segmento literal: se valida antes
+	// para no depender de url.PathEscape y evitar la doble codificación de la
+	// URL. Un valor fuera del patrón no se consulta.
+	if !IDConductorValido(conductorID) {
+		return Reputacion{}, fmt.Errorf("%w: identificador de conductor inválido", ErrRespuestaInesperada)
+	}
 	var respuesta respuestaPuntaje
 	consulta := url.Values{}
-	estado, err := c.base.obtener(ctx, "/perfiles/"+url.PathEscape(conductorID)+"/puntaje", consulta, &respuesta)
+	estado, err := c.base.obtener(ctx, "/perfiles/"+conductorID+"/puntaje", consulta, &respuesta)
 	if err != nil {
 		return Reputacion{}, err
 	}

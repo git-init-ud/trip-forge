@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func TestPuntajeConsultaRutaYCabeceras(t *testing.T) {
 	}))
 	defer servidor.Close()
 
-	cliente, err := NuevoClienteReputacion(servidor.URL, time.Second, "secreto")
+	cliente, err := NuevoClienteReputacion(servidor.URL, time.Second, "secreto", "token-reputacion")
 	if err != nil {
 		t.Fatalf("construir el cliente: %v", err)
 	}
@@ -43,6 +44,9 @@ func TestPuntajeConsultaRutaYCabeceras(t *testing.T) {
 	}
 	if cabeceras.Get("X-Request-Id") != "req-9" || cabeceras.Get("X-Cluster-Secret") != "secreto" {
 		t.Fatalf("cabeceras = %v", cabeceras)
+	}
+	if autorizacion := cabeceras.Get("Authorization"); autorizacion != "Bearer token-reputacion" {
+		t.Fatalf("Authorization = %q", autorizacion)
 	}
 	if reputacion.Puntaje != 4.7 || reputacion.Insignia != matching.InsigniaConfiable {
 		t.Fatalf("reputación = %+v", reputacion)
@@ -65,7 +69,7 @@ func TestPuntajeOmiteCamposOpcionalesAusentes(t *testing.T) {
 	}))
 	defer servidor.Close()
 
-	cliente, err := NuevoClienteReputacion(servidor.URL, time.Second, "")
+	cliente, err := NuevoClienteReputacion(servidor.URL, time.Second, "", "")
 	if err != nil {
 		t.Fatalf("construir el cliente: %v", err)
 	}
@@ -107,7 +111,7 @@ func TestPuntajeErroresTipados(t *testing.T) {
 			}))
 			defer servidor.Close()
 
-			cliente, err := NuevoClienteReputacion(servidor.URL, time.Second, "")
+			cliente, err := NuevoClienteReputacion(servidor.URL, time.Second, "", "")
 			if err != nil {
 				t.Fatalf("construir el cliente: %v", err)
 			}
@@ -119,6 +123,54 @@ func TestPuntajeErroresTipados(t *testing.T) {
 	}
 }
 
+func TestPuntajeNoDobleCodificaElID(t *testing.T) {
+	var rutaRecibida, uriRecibida string
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rutaRecibida = r.URL.Path
+		uriRecibida = r.RequestURI
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"puntaje":4,"insignia":"regular"}`))
+	}))
+	defer servidor.Close()
+
+	cliente, err := NuevoClienteReputacion(servidor.URL, time.Second, "", "")
+	if err != nil {
+		t.Fatalf("construir el cliente: %v", err)
+	}
+	if _, err := cliente.Puntaje(context.Background(), "usr_12-AB"); err != nil {
+		t.Fatalf("consultar: %v", err)
+	}
+	if rutaRecibida != "/perfiles/usr_12-AB/puntaje" {
+		t.Fatalf("ruta = %q", rutaRecibida)
+	}
+	if uriRecibida != "/perfiles/usr_12-AB/puntaje" {
+		t.Fatalf("RequestURI = %q, el id se codificó de más", uriRecibida)
+	}
+}
+
+func TestPuntajeRechazaIdentificadorInvalido(t *testing.T) {
+	var peticiones int32
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&peticiones, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"puntaje":4,"insignia":"regular"}`))
+	}))
+	defer servidor.Close()
+
+	cliente, err := NuevoClienteReputacion(servidor.URL, time.Second, "", "")
+	if err != nil {
+		t.Fatalf("construir el cliente: %v", err)
+	}
+	for _, id := range []string{"a/b", "usr 12", "../usr-12", ""} {
+		if _, err := cliente.Puntaje(context.Background(), id); !errors.Is(err, ErrRespuestaInesperada) {
+			t.Fatalf("Puntaje(%q) = %v, se esperaba ErrRespuestaInesperada", id, err)
+		}
+	}
+	if peticiones != 0 {
+		t.Fatalf("no se debía consultar ninguna ruta: %d peticiones", peticiones)
+	}
+}
+
 func TestPuntajeRespetaElPlazo(t *testing.T) {
 	liberar := make(chan struct{})
 	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +179,7 @@ func TestPuntajeRespetaElPlazo(t *testing.T) {
 	defer servidor.Close()
 	defer close(liberar)
 
-	cliente, err := NuevoClienteReputacion(servidor.URL, 20*time.Millisecond, "")
+	cliente, err := NuevoClienteReputacion(servidor.URL, 20*time.Millisecond, "", "")
 	if err != nil {
 		t.Fatalf("construir el cliente: %v", err)
 	}

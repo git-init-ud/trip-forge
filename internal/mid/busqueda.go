@@ -190,6 +190,9 @@ func (s *Servicio) Buscar(ctx context.Context, busqueda Busqueda) (ResultadoBusq
 		if ruta.Estado != rutas.Abierta || ruta.CuposDisponibles < 1 || ruta.ConductorID == "" {
 			continue
 		}
+		if ruta.Salida.Before(desde) || ruta.Salida.After(hasta) {
+			continue
+		}
 		trazado, err := puntosDelTrazado(ruta.Trazado)
 		if err != nil {
 			log.Printf("mid: se descarta la ruta %q por trazado inválido request_id=%q",

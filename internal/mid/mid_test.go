@@ -131,6 +131,11 @@ func busquedaDePrueba() Busqueda {
 	}
 }
 
+// salidaDePrueba cae dentro de la ventana fija de busquedaDePrueba.
+func salidaDePrueba() time.Time {
+	return time.Date(2030, 1, 15, 7, 0, 0, 0, time.UTC)
+}
+
 func servicioDePrueba(t *testing.T, rutasFake BuscadorRutas, reputacionFake ConsultorReputacion, opciones Opciones) *Servicio {
 	t.Helper()
 	servicio, err := NuevoServicio(rutasFake, reputacionFake, opciones)
@@ -187,8 +192,8 @@ func TestBuscarExcluyeConductorEnObservacion(t *testing.T) {
 		"usr-regular":   {Puntaje: 3.5, Insignia: matching.InsigniaRegular},
 	})
 	servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{
-		rutaEnLinea("ruta-observada", "usr-observado", time.Now()),
-		rutaEnLinea("ruta-regular", "usr-regular", time.Now()),
+		rutaEnLinea("ruta-observada", "usr-observado", salidaDePrueba()),
+		rutaEnLinea("ruta-regular", "usr-regular", salidaDePrueba()),
 	}}, reputacion, Opciones{})
 
 	resultado, err := servicio.Buscar(context.Background(), busquedaDePrueba())
@@ -200,6 +205,57 @@ func TestBuscarExcluyeConductorEnObservacion(t *testing.T) {
 	}
 }
 
+func TestBuscarDescartaRutaFueraDeVentana(t *testing.T) {
+	ventana := busquedaDePrueba()
+	casos := []struct {
+		nombre string
+		salida time.Time
+	}{
+		{"antes de desde", ventana.Desde.Add(-time.Second)},
+		{"después de hasta", ventana.Hasta.Add(time.Second)},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			reputacion := nuevaReputacionFalsa(map[string]clients.Reputacion{
+				"usr-12": {Puntaje: 4.8, Insignia: matching.InsigniaConfiable},
+			})
+			servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{
+				rutaEnLinea("ruta-fuera", "usr-12", caso.salida),
+			}}, reputacion, Opciones{})
+
+			resultado, err := servicio.Buscar(context.Background(), ventana)
+			if err != nil {
+				t.Fatalf("buscar: %v", err)
+			}
+			if len(resultado.Items) != 0 {
+				t.Fatalf("items = %+v", resultado.Items)
+			}
+			if llamadas := reputacion.contarLlamadas(); len(llamadas) != 0 {
+				t.Fatalf("una ruta fuera de ventana no debe llegar a reputación: %v", llamadas)
+			}
+		})
+	}
+}
+
+func TestBuscarAceptaSalidasEnLosBordesDeLaVentana(t *testing.T) {
+	ventana := busquedaDePrueba()
+	reputacion := nuevaReputacionFalsa(map[string]clients.Reputacion{
+		"usr-12": {Puntaje: 4.8, Insignia: matching.InsigniaConfiable},
+	})
+	servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{
+		rutaEnLinea("ruta-desde", "usr-12", ventana.Desde),
+		rutaEnLinea("ruta-hasta", "usr-12", ventana.Hasta),
+	}}, reputacion, Opciones{})
+
+	resultado, err := servicio.Buscar(context.Background(), ventana)
+	if err != nil {
+		t.Fatalf("buscar: %v", err)
+	}
+	if len(resultado.Items) != 2 {
+		t.Fatalf("los bordes son inclusivos: %+v", resultado.Items)
+	}
+}
+
 func TestBuscarOmiteConductorSinPerfil(t *testing.T) {
 	reputacion := nuevaReputacionFalsa(map[string]clients.Reputacion{
 		"usr-existe": {Puntaje: 4.0, Insignia: matching.InsigniaConfiable},
@@ -207,8 +263,8 @@ func TestBuscarOmiteConductorSinPerfil(t *testing.T) {
 	reputacion.errores["usr-sin-perfil"] = clients.ErrPerfilNoEncontrado
 
 	servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{
-		rutaEnLinea("ruta-sin-perfil", "usr-sin-perfil", time.Now()),
-		rutaEnLinea("ruta-existe", "usr-existe", time.Now()),
+		rutaEnLinea("ruta-sin-perfil", "usr-sin-perfil", salidaDePrueba()),
+		rutaEnLinea("ruta-existe", "usr-existe", salidaDePrueba()),
 	}}, reputacion, Opciones{})
 
 	resultado, err := servicio.Buscar(context.Background(), busquedaDePrueba())
@@ -224,7 +280,7 @@ func TestBuscarSinCandidatosNoConsultaReputacion(t *testing.T) {
 	reputacion := nuevaReputacionFalsa(nil)
 	reputacion.errores["cualquiera"] = clients.ErrNoDisponible
 
-	lejana := rutaEnLinea("ruta-lejana", "usr-12", time.Now())
+	lejana := rutaEnLinea("ruta-lejana", "usr-12", salidaDePrueba())
 	lejana.Trazado.Coordinates = [][]float64{
 		{-74.2000, 4.6500},
 		{-74.1800, 4.6500},
@@ -257,7 +313,7 @@ func TestBuscarReputacionNoDisponibleConCandidatos(t *testing.T) {
 	reputacion := nuevaReputacionFalsa(nil)
 	reputacion.errores["usr-12"] = clients.ErrNoDisponible
 	servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{
-		rutaEnLinea("ruta-uno", "usr-12", time.Now()),
+		rutaEnLinea("ruta-uno", "usr-12", salidaDePrueba()),
 	}}, reputacion, Opciones{})
 
 	_, err := servicio.Buscar(context.Background(), busquedaDePrueba())
@@ -286,8 +342,8 @@ func TestBuscarDeduplicaConductores(t *testing.T) {
 		"usr-12": {Puntaje: 4.0, Insignia: matching.InsigniaConfiable},
 	})
 	servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{
-		rutaEnLinea("ruta-uno", "usr-12", time.Now()),
-		rutaEnLinea("ruta-dos", "usr-12", time.Now()),
+		rutaEnLinea("ruta-uno", "usr-12", salidaDePrueba()),
+		rutaEnLinea("ruta-dos", "usr-12", salidaDePrueba()),
 	}}, reputacion, Opciones{})
 
 	if _, err := servicio.Buscar(context.Background(), busquedaDePrueba()); err != nil {
@@ -305,7 +361,7 @@ func TestBuscarLimitaLaConcurrenciaDeReputacion(t *testing.T) {
 	rutasEncontradas := make([]rutas.Ruta, 0, len(conductores))
 	for _, conductor := range conductores {
 		puntajes[conductor] = clients.Reputacion{Puntaje: 4.0, Insignia: matching.InsigniaConfiable}
-		rutasEncontradas = append(rutasEncontradas, rutaEnLinea("ruta-"+conductor, conductor, time.Now()))
+		rutasEncontradas = append(rutasEncontradas, rutaEnLinea("ruta-"+conductor, conductor, salidaDePrueba()))
 	}
 	reputacion := nuevaReputacionFalsa(puntajes)
 	reputacion.demora = 5 * time.Millisecond
@@ -326,11 +382,11 @@ func TestBuscarDescartaTrazadoInvalido(t *testing.T) {
 	reputacion := nuevaReputacionFalsa(map[string]clients.Reputacion{
 		"usr-12": {Puntaje: 4.0, Insignia: matching.InsigniaConfiable},
 	})
-	invalida := rutaEnLinea("ruta-invalida", "usr-12", time.Now())
+	invalida := rutaEnLinea("ruta-invalida", "usr-12", salidaDePrueba())
 	invalida.Trazado.Coordinates = [][]float64{{-74.06, 95}, {-74.04, 4.65}}
 	servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{
 		invalida,
-		rutaEnLinea("ruta-valida", "usr-12", time.Now()),
+		rutaEnLinea("ruta-valida", "usr-12", salidaDePrueba()),
 	}}, reputacion, Opciones{})
 
 	resultado, err := servicio.Buscar(context.Background(), busquedaDePrueba())
@@ -349,7 +405,7 @@ func TestBuscarDescartaRutaSinCupos(t *testing.T) {
 	reputacion := nuevaReputacionFalsa(map[string]clients.Reputacion{
 		"usr-12": {Puntaje: 4.0, Insignia: matching.InsigniaConfiable},
 	})
-	sinCupos := rutaEnLinea("ruta-llena", "usr-12", time.Now())
+	sinCupos := rutaEnLinea("ruta-llena", "usr-12", salidaDePrueba())
 	sinCupos.CuposDisponibles = 0
 	servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{sinCupos}}, reputacion, Opciones{})
 
@@ -395,6 +451,35 @@ func TestPanelCalculaOcupadosYOrdena(t *testing.T) {
 	}
 	if panel.Rutas[0].Ocupados != 1 || panel.Rutas[1].Ocupados != 0 {
 		t.Fatalf("ocupados = %+v", panel.Rutas)
+	}
+}
+
+func TestPanelOmiteRutasAjenasYDuplicadas(t *testing.T) {
+	reputacion := nuevaReputacionFalsa(map[string]clients.Reputacion{
+		"usr-12": {Puntaje: 4.7, Insignia: matching.InsigniaConfiable},
+	})
+	propia := rutaEnLinea("ruta-propia", "usr-12", time.Date(2030, 1, 15, 6, 30, 0, 0, time.UTC))
+	ajena := rutaEnLinea("ruta-ajena", "usr-99", time.Date(2030, 1, 15, 7, 0, 0, 0, time.UTC))
+
+	servicio := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{
+		ajena, propia, propia,
+	}}, reputacion, Opciones{})
+
+	panel, err := servicio.Panel(context.Background(), "usr-12")
+	if err != nil {
+		t.Fatalf("panel: %v", err)
+	}
+	if len(panel.Rutas) != 1 || panel.Rutas[0].Ruta.ID != "ruta-propia" {
+		t.Fatalf("rutas = %+v", panel.Rutas)
+	}
+
+	soloAjena := servicioDePrueba(t, &rutasFalsas{encontradas: []rutas.Ruta{ajena}}, reputacion, Opciones{})
+	panel, err = soloAjena.Panel(context.Background(), "usr-12")
+	if err != nil {
+		t.Fatalf("panel solo con rutas ajenas: %v", err)
+	}
+	if panel.Rutas == nil || len(panel.Rutas) != 0 {
+		t.Fatalf("rutas = %#v, se esperaba lista vacía", panel.Rutas)
 	}
 }
 

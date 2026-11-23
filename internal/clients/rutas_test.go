@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -69,12 +71,12 @@ func TestListarRutasPropagaFiltrosYCabeceras(t *testing.T) {
 			Items:  []rutas.Ruta{rutaDePrueba("ruta-uno", "usr-12")},
 			Total:  1,
 			Limit:  100,
-			Offset: 0,
+			Offset: 20,
 		})
 	}))
 	defer servidor.Close()
 
-	cliente, err := NuevoClienteRutas(servidor.URL, 2*time.Second, "secreto-cluster")
+	cliente, err := NuevoClienteRutas(servidor.URL, 2*time.Second, "secreto-cluster", "token-rutas")
 	if err != nil {
 		t.Fatalf("construir el cliente: %v", err)
 	}
@@ -115,20 +117,24 @@ func TestListarRutasPropagaFiltrosYCabeceras(t *testing.T) {
 	if cabeceras.Get("X-Cluster-Secret") != "secreto-cluster" {
 		t.Fatalf("X-Cluster-Secret = %q", cabeceras.Get("X-Cluster-Secret"))
 	}
+	if autorizacion := cabeceras.Get("Authorization"); autorizacion != "Bearer token-rutas" {
+		t.Fatalf("Authorization = %q", autorizacion)
+	}
 	if len(pagina.Items) != 1 || pagina.Items[0].ID != "ruta-uno" || pagina.Total != 1 {
 		t.Fatalf("página inesperada: %+v", pagina)
 	}
 }
 
-func TestListarRutasSinSecretoNoEnviaCabecera(t *testing.T) {
-	var secreto string
+func TestListarRutasSinCredencialesNoEnviaCabeceras(t *testing.T) {
+	var secreto, autorizacion string
 	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secreto = r.Header.Get("X-Cluster-Secret")
+		autorizacion = r.Header.Get("Authorization")
 		escribirJSON(t, w, http.StatusOK, PaginaRutas{Items: []rutas.Ruta{}, Total: 0, Limit: 20, Offset: 0})
 	}))
 	defer servidor.Close()
 
-	cliente, err := NuevoClienteRutas(servidor.URL, time.Second, "")
+	cliente, err := NuevoClienteRutas(servidor.URL, time.Second, "", "")
 	if err != nil {
 		t.Fatalf("construir el cliente: %v", err)
 	}
@@ -137,6 +143,9 @@ func TestListarRutasSinSecretoNoEnviaCabecera(t *testing.T) {
 	}
 	if secreto != "" {
 		t.Fatalf("no se esperaba X-Cluster-Secret: %q", secreto)
+	}
+	if autorizacion != "" {
+		t.Fatalf("no se esperaba Authorization: %q", autorizacion)
 	}
 }
 
@@ -163,7 +172,7 @@ func TestListarRutasErroresTipados(t *testing.T) {
 			}))
 			defer servidor.Close()
 
-			cliente, err := NuevoClienteRutas(servidor.URL, time.Second, "")
+			cliente, err := NuevoClienteRutas(servidor.URL, time.Second, "", "")
 			if err != nil {
 				t.Fatalf("construir el cliente: %v", err)
 			}
@@ -183,7 +192,7 @@ func TestListarRutasRespetaElPlazo(t *testing.T) {
 	defer servidor.Close()
 	defer close(liberar)
 
-	cliente, err := NuevoClienteRutas(servidor.URL, 20*time.Millisecond, "")
+	cliente, err := NuevoClienteRutas(servidor.URL, 20*time.Millisecond, "", "")
 	if err != nil {
 		t.Fatalf("construir el cliente: %v", err)
 	}
@@ -210,18 +219,19 @@ func TestListarTodasPaginaHastaCubrirTotal(t *testing.T) {
 		switch desplazamiento {
 		case "0", "":
 			for indice := 0; indice < 100; indice++ {
-				items = append(items, rutaDePrueba("ruta-"+string(rune('a'+indice%26)), "usr-12"))
+				items = append(items, rutaDePrueba(fmt.Sprintf("ruta-%03d", indice), "usr-12"))
 			}
 		case "100":
 			for indice := 0; indice < 50; indice++ {
-				items = append(items, rutaDePrueba("ruta-resto-"+string(rune('a'+indice%26)), "usr-12"))
+				items = append(items, rutaDePrueba(fmt.Sprintf("ruta-resto-%03d", indice), "usr-12"))
 			}
 		}
-		escribirJSON(t, w, http.StatusOK, PaginaRutas{Items: items, Total: 150, Limit: 100, Offset: 0})
+		offsetRespuesta, _ := strconv.Atoi(desplazamiento)
+		escribirJSON(t, w, http.StatusOK, PaginaRutas{Items: items, Total: 150, Limit: 100, Offset: offsetRespuesta})
 	}))
 	defer servidor.Close()
 
-	cliente, err := NuevoClienteRutas(servidor.URL, 2*time.Second, "")
+	cliente, err := NuevoClienteRutas(servidor.URL, 2*time.Second, "", "")
 	if err != nil {
 		t.Fatalf("construir el cliente: %v", err)
 	}
@@ -251,15 +261,17 @@ func TestListarTodasFallaAlSuperarElTopeDePaginas(t *testing.T) {
 	var peticiones int32
 	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&peticiones, 1)
+		desplazamiento := r.URL.Query().Get("offset")
+		offsetRespuesta, _ := strconv.Atoi(desplazamiento)
 		items := make([]rutas.Ruta, 100)
 		for indice := range items {
-			items[indice] = rutaDePrueba("ruta-"+string(rune('a'+indice%26)), "usr-12")
+			items[indice] = rutaDePrueba(fmt.Sprintf("ruta-%05d", offsetRespuesta+indice), "usr-12")
 		}
-		escribirJSON(t, w, http.StatusOK, PaginaRutas{Items: items, Total: 1000000, Limit: 100, Offset: 0})
+		escribirJSON(t, w, http.StatusOK, PaginaRutas{Items: items, Total: 1000000, Limit: 100, Offset: offsetRespuesta})
 	}))
 	defer servidor.Close()
 
-	cliente, err := NuevoClienteRutas(servidor.URL, 2*time.Second, "")
+	cliente, err := NuevoClienteRutas(servidor.URL, 2*time.Second, "", "")
 	if err != nil {
 		t.Fatalf("construir el cliente: %v", err)
 	}
@@ -268,6 +280,133 @@ func TestListarTodasFallaAlSuperarElTopeDePaginas(t *testing.T) {
 	}
 	if peticiones != MaximoPaginas {
 		t.Fatalf("peticiones = %d, se esperaban %d", peticiones, MaximoPaginas)
+	}
+}
+
+func TestListarRutasValidaLaFormaDeLaPagina(t *testing.T) {
+	itemsDosRutas, err := json.Marshal([]rutas.Ruta{
+		rutaDePrueba("ruta-a", "usr-12"),
+		rutaDePrueba("ruta-b", "usr-12"),
+	})
+	if err != nil {
+		t.Fatalf("serializar las rutas: %v", err)
+	}
+	casos := []struct {
+		nombre string
+		cuerpo string
+	}{
+		{"null", `null`},
+		{"objeto sin campos", `{}`},
+		{"items null", `{"items":null,"total":0,"limit":20,"offset":0}`},
+		{"sin total", `{"items":[],"limit":20,"offset":0}`},
+		{"limit cero", `{"items":[],"total":0,"limit":0,"offset":0}`},
+		{"total menor que items", fmt.Sprintf(`{"items":%s,"total":1,"limit":20,"offset":0}`, itemsDosRutas)},
+		{"más items que limit", fmt.Sprintf(`{"items":%s,"total":2,"limit":1,"offset":0}`, itemsDosRutas)},
+		{"offset distinto", `{"items":[],"total":0,"limit":20,"offset":10}`},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(caso.cuerpo))
+			}))
+			defer servidor.Close()
+
+			cliente, err := NuevoClienteRutas(servidor.URL, time.Second, "", "")
+			if err != nil {
+				t.Fatalf("construir el cliente: %v", err)
+			}
+			if _, err := cliente.ListarRutas(context.Background(), FiltrosRutas{}); !errors.Is(err, ErrNoDisponible) {
+				t.Fatalf("error = %v, se esperaba ErrNoDisponible", err)
+			}
+		})
+	}
+}
+
+func TestListarRutasAceptaPaginaVaciaValida(t *testing.T) {
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[],"total":0,"limit":20,"offset":0}`))
+	}))
+	defer servidor.Close()
+
+	cliente, err := NuevoClienteRutas(servidor.URL, time.Second, "", "")
+	if err != nil {
+		t.Fatalf("construir el cliente: %v", err)
+	}
+	pagina, err := cliente.ListarRutas(context.Background(), FiltrosRutas{})
+	if err != nil {
+		t.Fatalf("listar: %v", err)
+	}
+	if pagina.Items == nil || len(pagina.Items) != 0 || pagina.Total != 0 {
+		t.Fatalf("página = %+v", pagina)
+	}
+}
+
+func TestListarTodasFallaConPaginaVaciaPendiente(t *testing.T) {
+	var peticiones int32
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&peticiones, 1)
+		desplazamiento := r.URL.Query().Get("offset")
+		offsetRespuesta, _ := strconv.Atoi(desplazamiento)
+		items := []rutas.Ruta{}
+		if offsetRespuesta == 0 {
+			for indice := 0; indice < 100; indice++ {
+				items = append(items, rutaDePrueba(fmt.Sprintf("ruta-%03d", indice), "usr-12"))
+			}
+		}
+		escribirJSON(t, w, http.StatusOK, PaginaRutas{Items: items, Total: 150, Limit: 100, Offset: offsetRespuesta})
+	}))
+	defer servidor.Close()
+
+	cliente, err := NuevoClienteRutas(servidor.URL, 2*time.Second, "", "")
+	if err != nil {
+		t.Fatalf("construir el cliente: %v", err)
+	}
+	if _, err := cliente.ListarTodas(context.Background(), FiltrosRutas{}); !errors.Is(err, ErrNoDisponible) {
+		t.Fatalf("error = %v, se esperaba ErrNoDisponible", err)
+	}
+	if peticiones != 2 {
+		t.Fatalf("peticiones = %d, se esperaban 2", peticiones)
+	}
+}
+
+func TestListarTodasDeduplicaPorID(t *testing.T) {
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		desplazamiento := r.URL.Query().Get("offset")
+		offsetRespuesta, _ := strconv.Atoi(desplazamiento)
+		items := []rutas.Ruta{}
+		if offsetRespuesta == 0 {
+			for indice := 0; indice < 100; indice++ {
+				items = append(items, rutaDePrueba(fmt.Sprintf("ruta-%03d", indice), "usr-12"))
+			}
+		} else {
+			// Una ruta repetida de la página anterior y una nueva.
+			items = append(items,
+				rutaDePrueba("ruta-099", "usr-12"),
+				rutaDePrueba("ruta-100", "usr-12"))
+		}
+		escribirJSON(t, w, http.StatusOK, PaginaRutas{Items: items, Total: 101, Limit: 100, Offset: offsetRespuesta})
+	}))
+	defer servidor.Close()
+
+	cliente, err := NuevoClienteRutas(servidor.URL, 2*time.Second, "", "")
+	if err != nil {
+		t.Fatalf("construir el cliente: %v", err)
+	}
+	todas, err := cliente.ListarTodas(context.Background(), FiltrosRutas{})
+	if err != nil {
+		t.Fatalf("listar todas: %v", err)
+	}
+	if len(todas) != 101 {
+		t.Fatalf("rutas = %d, se esperaban 101 sin duplicados", len(todas))
+	}
+	vistos := map[string]struct{}{}
+	for _, ruta := range todas {
+		if _, repetida := vistos[ruta.ID]; repetida {
+			t.Fatalf("ruta duplicada: %s", ruta.ID)
+		}
+		vistos[ruta.ID] = struct{}{}
 	}
 }
 
@@ -284,7 +423,7 @@ func TestNuevoClienteRutasValidaConfiguracion(t *testing.T) {
 	}
 	for _, caso := range casos {
 		t.Run(caso.nombre, func(t *testing.T) {
-			if _, err := NuevoClienteRutas(caso.base, caso.plazo, ""); err == nil {
+			if _, err := NuevoClienteRutas(caso.base, caso.plazo, "", ""); err == nil {
 				t.Fatal("se esperaba un error de configuración")
 			}
 		})

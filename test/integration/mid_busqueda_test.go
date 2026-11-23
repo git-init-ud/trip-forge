@@ -128,11 +128,11 @@ func midNuevoEntorno(t *testing.T) *midEntorno {
 // simular un CRUD caído apuntando a un servidor ya cerrado.
 func midServidorHacia(t *testing.T, crudURL, reputacionURL string) *httptest.Server {
 	t.Helper()
-	clienteRutas, err := clients.NuevoClienteRutas(crudURL, 3*time.Second, "")
+	clienteRutas, err := clients.NuevoClienteRutas(crudURL, 3*time.Second, "", "")
 	if err != nil {
 		t.Fatalf("cliente de rutas: %v", err)
 	}
-	clienteReputacion, err := clients.NuevoClienteReputacion(reputacionURL, 2*time.Second, "")
+	clienteReputacion, err := clients.NuevoClienteReputacion(reputacionURL, 2*time.Second, "", "")
 	if err != nil {
 		t.Fatalf("cliente de reputación: %v", err)
 	}
@@ -237,10 +237,10 @@ func TestMIDBusquedaOrdenaYExcluyeConductores(t *testing.T) {
 		if item.Ruta.ID == observada.ID || item.Ruta.ID == sinPerfil.ID || item.Ruta.ID == invertida.ID {
 			t.Fatalf("la búsqueda incluyó una ruta que debía excluir: %+v", item)
 		}
-		if item.DistanciaOrigenM <= 0 || item.DistanciaOrigenM > 800 {
+		if item.DistanciaOrigenM < 0 || item.DistanciaOrigenM >= 800 {
 			t.Fatalf("distanciaOrigenM = %v", item.DistanciaOrigenM)
 		}
-		if item.DistanciaDestinoM <= 0 || item.DistanciaDestinoM > 800 {
+		if item.DistanciaDestinoM < 0 || item.DistanciaDestinoM >= 800 {
 			t.Fatalf("distanciaDestinoM = %v", item.DistanciaDestinoM)
 		}
 	}

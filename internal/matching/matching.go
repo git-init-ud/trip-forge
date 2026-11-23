@@ -70,9 +70,10 @@ type Evaluacion struct {
 
 // Evaluar proyecta origen y destino sobre el trazado y decide si la ruta sirve.
 //
-// Es compatible cuando ambas proyecciones quedan dentro del radio y el origen
-// aparece estrictamente antes que el destino sobre el recorrido. El orden
-// estricto descarta los viajes en sentido contrario.
+// Es compatible cuando ambas proyecciones quedan estrictamente dentro del radio
+// y el origen aparece estrictamente antes que el destino sobre el recorrido. El
+// orden estricto descarta los viajes en sentido contrario y el radio estricto
+// respeta el "a menos de 800 m" del enunciado.
 func Evaluar(origen, destino Punto, trazado []Punto, radioM float64) (Evaluacion, bool, error) {
 	if !esFinito(radioM) || radioM <= 0 {
 		return Evaluacion{}, false, ErrRadioInvalido
@@ -89,10 +90,10 @@ func Evaluar(origen, destino Punto, trazado []Punto, radioM float64) (Evaluacion
 	return evaluacion, evaluacion.Compatible(radioM), nil
 }
 
-// Compatible aplica el radio y el sentido del trayecto.
+// Compatible aplica el radio estricto y el sentido del trayecto.
 func (e Evaluacion) Compatible(radioM float64) bool {
-	return e.Origen.DistanciaM <= radioM &&
-		e.Destino.DistanciaM <= radioM &&
+	return e.Origen.DistanciaM < radioM &&
+		e.Destino.DistanciaM < radioM &&
 		e.Origen.AvanceM < e.Destino.AvanceM
 }
 

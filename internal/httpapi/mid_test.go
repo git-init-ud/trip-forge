@@ -193,7 +193,7 @@ func TestBusquedaRespondeContrato(t *testing.T) {
 	if item.Ruta.ID != "ruta-uno" || item.Insignia != matching.InsigniaConfiable || item.PuntajeConductor != 4.7 {
 		t.Fatalf("item = %+v", item)
 	}
-	if item.DistanciaOrigenM <= 0 || item.DistanciaDestinoM <= 0 {
+	if item.DistanciaOrigenM < 0 || item.DistanciaDestinoM < 0 {
 		t.Fatalf("distancias = %v %v", item.DistanciaOrigenM, item.DistanciaDestinoM)
 	}
 
@@ -328,6 +328,28 @@ func TestPanelPerfilInexistente(t *testing.T) {
 	}
 	if repositorio.llamadas != 0 {
 		t.Fatal("no se deben listar rutas de un perfil inexistente")
+	}
+}
+
+func TestPanelRechazaIdentificadorConFormatoInvalido(t *testing.T) {
+	repositorio := &midRutasFalsas{}
+	reputacion := &midReputacionFalsa{}
+	manejador := RouterMID(midServicioDePrueba(t, repositorio, reputacion))
+
+	for _, id := range []string{"usr.12", strings.Repeat("a", 129), "usr%2012"} {
+		t.Run(id, func(t *testing.T) {
+			grabador := solicitar(manejador, http.MethodGet, "/conductores/"+id+"/panel", "", "", "")
+			if grabador.Code != http.StatusBadRequest {
+				t.Fatalf("estado = %d: %s", grabador.Code, grabador.Body.String())
+			}
+			respuesta, detalle := decodificarError(t, grabador)
+			if respuesta.Codigo != codigoSolicitudInvalida || detalle["campo"] != "id" {
+				t.Fatalf("respuesta = %+v detalle = %v", respuesta, detalle)
+			}
+		})
+	}
+	if reputacion.contarLlamadas() != 0 || repositorio.llamadas != 0 {
+		t.Fatal("no se deben consultar dependencias con un id inválido")
 	}
 }
 

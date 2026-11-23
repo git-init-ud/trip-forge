@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -44,6 +45,18 @@ type claveContexto string
 
 const claveRequestID claveContexto = "request-id"
 
+// patronIDConductor acepta identificadores que no necesitan codificación en
+// una ruta HTTP. Es deliberadamente estricto: el contrato de perfiles usa
+// identificadores opacos como "usr-12".
+var patronIDConductor = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// IDConductorValido indica si el identificador se puede insertar sin escapar
+// en la ruta de reputación. Evita la doble codificación de la URL y los
+// segmentos inesperados.
+func IDConductorValido(id string) bool {
+	return patronIDConductor.MatchString(id)
+}
+
 // ConRequestID devuelve un contexto con el identificador que los clientes
 // propagan como X-Request-Id. El MID lo usa para continuar la traza que inició
 // el gateway.
@@ -66,10 +79,11 @@ type clienteBase struct {
 	base    *url.URL
 	plazo   time.Duration
 	secreto string
+	token   string
 	http    *http.Client
 }
 
-func nuevoClienteBase(nombre, baseURL string, plazo time.Duration, secreto string) (*clienteBase, error) {
+func nuevoClienteBase(nombre, baseURL string, plazo time.Duration, secreto, token string) (*clienteBase, error) {
 	if plazo <= 0 {
 		return nil, fmt.Errorf("%s: el plazo debe ser positivo", nombre)
 	}
@@ -84,11 +98,12 @@ func nuevoClienteBase(nombre, baseURL string, plazo time.Duration, secreto strin
 		base:    direccion,
 		plazo:   plazo,
 		secreto: strings.TrimSpace(secreto),
+		token:   strings.TrimSpace(token),
 		http: &http.Client{
 			Timeout: plazo,
-			// No se siguen redirecciones: el secreto del gateway no debe viajar
-			// a un destino distinto del configurado. Un 3xx se trata como
-			// respuesta inesperada.
+			// No se siguen redirecciones: el secreto y el token del gateway no
+			// deben viajar a un destino distinto del configurado. Un 3xx se
+			// trata como respuesta inesperada.
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -117,6 +132,10 @@ func (c *clienteBase) obtener(ctx context.Context, ruta string, consulta url.Val
 	}
 	if c.secreto != "" {
 		peticion.Header.Set(cabeceraSecreto, c.secreto)
+	}
+	if c.token != "" {
+		// El token de servicio se conserva solo en memoria: nunca se registra.
+		peticion.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
 	respuesta, err := c.http.Do(peticion)

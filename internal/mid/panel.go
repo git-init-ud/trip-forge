@@ -37,7 +37,17 @@ func (s *Servicio) Panel(ctx context.Context, conductorID string) (Panel, error)
 	})
 
 	rutasConOcupacion := make([]RutaConOcupacion, 0, len(encontradas))
+	vistos := make(map[string]struct{}, len(encontradas))
 	for _, ruta := range encontradas {
+		// El CRUD ya filtra por conductor, pero el MID no confía en que una
+		// respuesta paginada no mezcle rutas ajenas ni repita identificadores.
+		if ruta.ConductorID != conductorID {
+			continue
+		}
+		if _, repetida := vistos[ruta.ID]; repetida {
+			continue
+		}
+		vistos[ruta.ID] = struct{}{}
 		ocupados := ruta.CuposTotales - ruta.CuposDisponibles
 		if ocupados < 0 {
 			ocupados = 0

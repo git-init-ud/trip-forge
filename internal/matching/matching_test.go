@@ -119,6 +119,32 @@ func TestEvaluarRadioLimite(t *testing.T) {
 	}
 }
 
+func TestEvaluarRadioExactoEsIncompatible(t *testing.T) {
+	trazado := trazadoHorizontal()
+	// El origen queda a unos 222 m al norte; el destino cae sobre la línea.
+	origen := Punto{Latitud: 4.6520, Longitud: -74.0550}
+	destino := Punto{Latitud: 4.6500, Longitud: -74.0450}
+
+	evaluacion, compatible, err := Evaluar(origen, destino, trazado, 800)
+	if err != nil {
+		t.Fatalf("evaluar: %v", err)
+	}
+	if !compatible {
+		t.Fatalf("con radio amplio la ruta debe ser compatible: %+v", evaluacion)
+	}
+
+	radioExacto := evaluacion.Origen.DistanciaM
+	if evaluacion.Destino.DistanciaM >= radioExacto {
+		t.Fatalf("el destino debe quedar más cerca que el radio exacto del origen: %+v", evaluacion)
+	}
+	if _, compatible, err := Evaluar(origen, destino, trazado, radioExacto); err != nil || compatible {
+		t.Fatalf("el radio exacto debe ser incompatible: compatible=%v err=%v", compatible, err)
+	}
+	if _, compatible, err := Evaluar(origen, destino, trazado, math.Nextafter(radioExacto, math.Inf(1))); err != nil || !compatible {
+		t.Fatalf("un radio apenas mayor debe aceptar el punto: compatible=%v err=%v", compatible, err)
+	}
+}
+
 func TestEvaluarRechazaDestinoLejano(t *testing.T) {
 	trazado := trazadoHorizontal()
 	origen := Punto{Latitud: 4.6500, Longitud: -74.0550}
@@ -130,6 +156,22 @@ func TestEvaluarRechazaDestinoLejano(t *testing.T) {
 	}
 	if compatible {
 		t.Fatal("un destino a más de un kilómetro no debe ser compatible")
+	}
+}
+
+func TestEvaluarRechazaOrigenLejano(t *testing.T) {
+	trazado := trazadoHorizontal()
+	// El origen queda a más de un kilómetro del trazado; el destino sí cae
+	// sobre él. La ruta debe descartarse por el extremo del pasajero.
+	origen := Punto{Latitud: 4.6600, Longitud: -74.0550}
+	destino := Punto{Latitud: 4.6500, Longitud: -74.0450}
+
+	_, compatible, err := Evaluar(origen, destino, trazado, 800)
+	if err != nil {
+		t.Fatalf("evaluar: %v", err)
+	}
+	if compatible {
+		t.Fatal("un origen a más de un kilómetro no debe ser compatible aunque el destino esté cerca")
 	}
 }
 

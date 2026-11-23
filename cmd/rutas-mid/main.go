@@ -32,6 +32,7 @@ func ejecutar() error {
 		variable("RUTAS_CRUD_URL", "http://127.0.0.1:8081"),
 		milisegundos("RUTAS_TIMEOUT_MS", 3000),
 		secreto,
+		variable("RUTAS_TOKEN", ""),
 	)
 	if err != nil {
 		return err
@@ -40,6 +41,7 @@ func ejecutar() error {
 		variable("REPUTACION_URL", "http://127.0.0.1:8083"),
 		milisegundos("REPUTACION_TIMEOUT_MS", 2000),
 		secreto,
+		variable("REPUTACION_TOKEN", ""),
 	)
 	if err != nil {
 		return err

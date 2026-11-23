@@ -40,6 +40,10 @@ func panelConductor(servicio *mid.Servicio) http.HandlerFunc {
 			responderErrorMID(w, r, &rutas.ErrorValidacion{Campo: "id", Motivo: "es obligatorio"}, "")
 			return
 		}
+		if !clients.IDConductorValido(conductorID) {
+			responderErrorMID(w, r, &rutas.ErrorValidacion{Campo: "id", Motivo: "tiene un formato inválido"}, "")
+			return
+		}
 		panel, err := servicio.Panel(contextoDependencias(r), conductorID)
 		if err != nil {
 			responderErrorMID(w, r, err, conductorID)
