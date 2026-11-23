@@ -19,15 +19,18 @@ info:
     las operaciones de edición y cierre leen la identidad de la cabecera
     `X-Usuario-Id` y exigen que coincida con `conductorId`. Si el proceso
     define `GATEWAY_SECRET`, toda petición distinta de `/health` debe traer
-    `X-Cluster-Secret`. Mientras esos acuerdos no existan, `POST /rutas` sigue
-    aceptando `conductorId` en el cuerpo y la comprobación del secreto está
-    desactivada por defecto.
+    `X-Cluster-Secret`. Cuando el secreto está activo, `POST /rutas` también
+    exige `X-Usuario-Id`; sin él la comprobación queda desactivada solo para
+    desarrollo local y se acepta `conductorId` en el cuerpo.
 
     Idempotencia de cupos: queda pendiente con Reservas. El contrato actual
     mantiene `delta` y no acepta todavía una clave de idempotencia.
 servers:
   - url: http://127.0.0.1:8081
     description: Proceso local del CRUD, usado por el visor OpenAPI
+security:
+  - {}
+  - clusterSecret: []
 tags:
   - name: salud
   - name: rutas
@@ -126,6 +129,8 @@ paths:
                 $ref: '#/components/schemas/ListaRutas'
         '400':
           $ref: '#/components/responses/SolicitudInvalida'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
         '500':
           $ref: '#/components/responses/ErrorInterno'
     post:
@@ -189,6 +194,8 @@ paths:
                 $ref: '#/components/schemas/Ruta'
         '400':
           $ref: '#/components/responses/SolicitudInvalida'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
         '403':
           $ref: '#/components/responses/NoAutorizado'
         '500':
@@ -216,6 +223,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Ruta'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
         '404':
           $ref: '#/components/responses/NoEncontrada'
         '500':
@@ -278,6 +287,8 @@ paths:
                 $ref: '#/components/schemas/Ruta'
         '400':
           $ref: '#/components/responses/SolicitudInvalida'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
         '403':
           $ref: '#/components/responses/NoAutorizado'
         '404':
@@ -325,6 +336,8 @@ paths:
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
         '403':
           $ref: '#/components/responses/NoAutorizado'
         '404':
@@ -388,6 +401,8 @@ paths:
                 $ref: '#/components/schemas/Ruta'
         '400':
           $ref: '#/components/responses/SolicitudInvalida'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
         '404':
           $ref: '#/components/responses/NoEncontrada'
         '409':
@@ -414,6 +429,15 @@ paths:
         '500':
           $ref: '#/components/responses/ErrorInterno'
 components:
+  securitySchemes:
+    clusterSecret:
+      type: apiKey
+      in: header
+      name: X-Cluster-Secret
+      description: |
+        Cabecera compartida del gateway. Solo es obligatoria cuando el proceso
+        define `GATEWAY_SECRET`; el nombre es provisional hasta el acuerdo con
+        el clúster.
   headers:
     X-Request-Id:
       description: Identificador de la solicitud, propio o generado por el servidor; también viaja en las respuestas de error
@@ -427,7 +451,6 @@ components:
       description: Identificador de la ruta
       schema:
         type: string
-        pattern: '^ruta-[a-z0-9]+$'
         example: ruta-1a2b3c4d5e6f7a8b
     UsuarioId:
       name: X-Usuario-Id
@@ -482,11 +505,26 @@ components:
             mensaje: La ruta no existe
             detalle:
               rutaId: ruta-1a2b3c4d5e6f7a8b
+    NoAutenticado:
+      description: |
+        Falta la cabecera `X-Cluster-Secret` o no coincide. Solo ocurre cuando
+        el proceso define `GATEWAY_SECRET`.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: no_autorizado
+            mensaje: Falta la cabecera secreta del gateway o no coincide
+            detalle: {}
     NoAutorizado:
       description: |
-        La identidad no es la propietaria de la ruta o falta la cabecera de
-        identidad. Con `GATEWAY_SECRET` definida, una petición sin
-        `X-Cluster-Secret` válida responde 401 con el mismo código.
+        La identidad no es la propietaria de la ruta. En `PUT` y `DELETE`
+        también ocurre cuando falta `X-Usuario-Id`. En `POST`, si el gateway
+        está activo, falta la identidad o no coincide con el `conductorId`.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'

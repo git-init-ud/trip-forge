@@ -30,14 +30,17 @@
 
   <p class="aviso">
     <strong>Documentación ejecutable.</strong> Para el CRUD levanta MongoDB y
-    <code>go run ./cmd/rutas-crud</code>; para el MID, solo
-    <code>go run ./cmd/rutas-mid</code>. En cada operación abre
-    <em>Try it out</em> y pulsa <em>Execute</em>. El visor llama a
-    <code>http://127.0.0.1:8081</code> y <code>http://127.0.0.1:8082</code>;
-    los servicios autorizan el origen del visor
-    (<code>http://127.0.0.1:8090</code>) por CORS. Las fechas de los ejemplos
-    son futuras para que puedas publicar sin editar el cuerpo. Más detalle en
-    el <a href="markdown.html?file=md/README.md">README</a>.
+    <code>go run ./cmd/rutas-crud</code>. Para el MID levanta también
+    <code>go run ./cmd/rutas-mid</code> y un servicio o doble de reputación en
+    <code>REPUTACION_URL</code>. <code>go run ./cmd/seed</code> carga las rutas
+    de demostración e imprime una ventana de búsqueda compatible. En cada
+    operación abre <em>Try it out</em> y pulsa <em>Execute</em>. El visor llama
+    a <code>http://127.0.0.1:8081</code> y
+    <code>http://127.0.0.1:8082</code>; los servicios autorizan el origen del
+    visor (<code>http://127.0.0.1:8090</code>) por CORS. Las fechas de los
+    ejemplos del CRUD son futuras para publicar sin editar el cuerpo; para
+    buscar, usa la ventana que imprime la semilla. Más detalle en el
+    <a href="markdown.html?file=md/README.md">README</a>.
   </p>
   <p class="estado" id="estado-servicio" role="status" aria-live="polite">Comprobando el servicio…</p>
 

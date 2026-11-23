@@ -16,8 +16,7 @@ var origenesDocumentacion = []string{
 
 const (
 	cabeceraOrigen = "Origin"
-	// metodosCORS incluye los métodos que publicará el contrato completo del
-	// CRUD; hoy solo GET, POST y PATCH tienen ruta registrada.
+	// metodosCORS incluye todos los métodos publicados por los contratos.
 	metodosCORS = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 	// X-Usuario-Id y X-Cluster-Secret son provisionales: el visor las envía
 	// mientras el gateway no esté integrado. Cuando el clúster acuerde los
@@ -46,8 +45,12 @@ func cors(siguiente http.Handler) http.Handler {
 			w.Header().Add("Vary", "Access-Control-Request-Headers")
 			if !autorizado {
 				// El navegador descarta esta respuesta; el 403 solo ayuda a
-				// diagnosticar desde curl. No es una operación del contrato.
-				w.WriteHeader(http.StatusForbidden)
+				// diagnosticar desde curl. Conserva el formato común de error.
+				responderJSON(w, http.StatusForbidden, errorRespuesta{
+					Codigo:  codigoNoAutorizado,
+					Mensaje: "El origen no está autorizado para CORS",
+					Detalle: map[string]any{},
+				})
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origen)

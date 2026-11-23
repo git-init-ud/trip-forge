@@ -13,9 +13,11 @@ info:
     Configuración provisional, pendiente de acuerdo con el clúster:
     `RUTAS_CRUD_URL` (por defecto `http://127.0.0.1:8081`), `REPUTACION_URL`
     (por defecto `http://127.0.0.1:8083`), `RADIO_M` (800), los plazos de cada
-    cliente y `GATEWAY_SECRET` para exigir `X-Cluster-Secret`. El nombre de la
-    cabecera de identidad y la del secreto se confirman con el líder del
-    gateway.
+    cliente y `GATEWAY_SECRET` para exigir `X-Cluster-Secret`. El MID envía
+    `RUTAS_TOKEN` y `REPUTACION_TOKEN` como `Authorization: Bearer` cuando
+    están definidos, para que el gateway aplique `rutas:leer` y
+    `perfiles:leer`. El nombre de las cabeceras y los scopes se confirman con
+    el líder del gateway.
 
     Es ejecutable desde el visor OpenAPI: levanta el proceso, abre una
     operación y usa `Try it out`. El visor corre por defecto en
@@ -26,6 +28,9 @@ info:
 servers:
   - url: http://127.0.0.1:8082
     description: Proceso local del MID, usado por el visor OpenAPI
+security:
+  - {}
+  - clusterSecret: []
 tags:
   - name: salud
   - name: busqueda
@@ -158,7 +163,7 @@ paths:
         description: Identificador del conductor
         schema:
           type: string
-          minLength: 1
+          pattern: '^[A-Za-z0-9_-]{1,128}$'
           example: usr-12
     get:
       operationId: obtenerPanelConductor
@@ -183,6 +188,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PanelConductor'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
         '401':
           $ref: '#/components/responses/NoAutorizado'
         '404':
@@ -204,6 +211,15 @@ paths:
         '500':
           $ref: '#/components/responses/ErrorInterno'
 components:
+  securitySchemes:
+    clusterSecret:
+      type: apiKey
+      in: header
+      name: X-Cluster-Secret
+      description: |
+        Cabecera compartida del gateway. Solo es obligatoria cuando el proceso
+        define `GATEWAY_SECRET`; el nombre es provisional hasta el acuerdo con
+        el clúster.
   headers:
     X-Request-Id:
       description: Identificador de la solicitud, propio o generado por el servidor

@@ -27,7 +27,7 @@ Abre la carpeta que contiene `go.mod` en GoLand y selecciona el SDK en *Settings
 | Docs | `go run ./cmd/docs` | `curl http://127.0.0.1:8090/health` |
 | Semilla | `go run ./cmd/seed` | imprime las 15 rutas cargadas |
 
-En PowerShell, `curl` se reemplaza por `Invoke-RestMethod`, por ejemplo `Invoke-RestMethod http://127.0.0.1:8081/health`. Cada proceso lee `HTTP_ADDR` para cambiar su dirección.
+En PowerShell, `curl` se reemplaza por `Invoke-RestMethod`, por ejemplo `Invoke-RestMethod http://127.0.0.1:8081/health`. Los procesos HTTP leen `HTTP_ADDR` para cambiar su dirección; el seed no es un proceso HTTP.
 
 ### Variables de entorno
 
@@ -44,13 +44,19 @@ Los procesos Go no cargan `.env` automáticamente: exporta las variables en la t
 | `RUTAS_TIMEOUT_MS` | MID | `3000` | Plazo de las llamadas al CRUD. |
 | `REPUTACION_TIMEOUT_MS` | MID | `2000` | Plazo de las llamadas a reputación. |
 | `REPUTACION_CONCURRENCIA` | MID | `4` | Consultas de reputación simultáneas por búsqueda. |
-| `GATEWAY_SECRET` | ambos | vacío | Si se define, exige `X-Cluster-Secret` en toda petición distinta de `/health`. |
+| `GATEWAY_SECRET` | ambos | vacío | Si se define, exige `X-Cluster-Secret` en toda petición distinta de `/health` y del preflight CORS. En despliegue debe definirse. |
+| `RUTAS_TOKEN` | MID | vacío | Token de servicio que se envía al CRUD como `Authorization: Bearer`. |
+| `REPUTACION_TOKEN` | MID | vacío | Token de servicio que se envía a reputación como `Authorization: Bearer`. |
+| `SEED_FORCE` | seed | vacío | Permite reemplazar rutas semilla con cupos comprometidos; úsalo solo sin reservas activas. |
+| `MID_URL` | seed | `http://127.0.0.1:8082` | URL que imprime en la consulta de demostración. |
 | `CORS_ORIGINS` | ambos | visor local en `8090` | Orígenes exactos autorizados; el comodín `*` no se acepta. |
 | `MONGODB_TEST_URI` | pruebas | vacío | Habilita las pruebas de integración; si queda vacío se omiten. |
 
 ## Datos semilla
 
-`go run ./cmd/seed` carga de forma idempotente 15 rutas con ids fijos `ruta-0001` a `ruta-0015`. No borra otras rutas. Las salidas son futuras y se calculan en la zona de Bogotá, pero se guardan en UTC. La semilla incluye rutas abiertas, una llena, una cerrada, un trazado en sentido inverso y una ruta que pasa cerca del destino pero lejos del origen del corredor de demostración.
+`go run ./cmd/seed` carga 15 rutas con ids fijos `ruta-0001` a `ruta-0015`. No borra otras rutas. Las salidas son futuras y se calculan en la zona de Bogotá, pero se guardan en UTC. La semilla incluye rutas abiertas, una llena, una cerrada, un trazado en sentido inverso y una ruta que pasa cerca del destino pero lejos del origen del corredor de demostración. Al terminar imprime una URL de `GET /rutas/compatibles` con la ventana que corresponde a esas fechas; úsala en la demo en lugar de copiar fechas fijas.
+
+La semilla es idempotente por ID y por estado esperado: si una ruta semilla sigue con los mismos datos e inventario, la vuelve a cargar refrescando solo las fechas. Si difiere del estado esperado —por ejemplo, porque una reserva consumió un cupo, alguien la editó o la cerró— se niega a reemplazar ninguna ruta; para forzarlo define `SEED_FORCE=1`, solo cuando no haya reservas activas. No ejecutes la semilla mientras Reservas tenga reservas confirmadas sobre esas rutas.
 
 Los conductores usan ids `usr-01` a `usr-12`; las rutas semilla y esos perfiles deben confirmarse con los grupos B y C antes de la demo. Los cupos ocupados de la semilla son datos de demostración: no representan reservas reales hasta que exista la integración con Reservas.
 
@@ -87,9 +93,9 @@ Los cupos se ajustan con `PATCH` y `{"delta": -1}`. El cambio de disponibilidad 
 
 ### Identidad y gateway (provisional)
 
-`PUT` y `DELETE` exigen la cabecera `X-Usuario-Id` y comprueban que coincida con el `conductorId`. `POST` la acepta de forma opcional mientras no exista el gateway: si llega, también debe coincidir. `GET /rutas`, `GET /rutas/{id}` y `PATCH /rutas/{id}/cupos` no usan identidad de usuario: el gateway debe aplicar `rutas:leer` y `rutas:escribir` a los consumidores entre servicios.
+`PUT` y `DELETE` exigen la cabecera `X-Usuario-Id` y comprueban que coincida con el `conductorId`. `POST` la acepta de forma opcional mientras no exista el gateway; si llega, también debe coincidir. Cuando `GATEWAY_SECRET` está definida, `POST` exige la identidad y ya no se toma `conductorId` como sustituto. `GET /rutas`, `GET /rutas/{id}` y `PATCH /rutas/{id}/cupos` no usan identidad de usuario: el gateway debe aplicar `rutas:leer` y `rutas:escribir` a los consumidores entre servicios.
 
-Si `GATEWAY_SECRET` está definida, ambos procesos rechazan con 401 cualquier petición distinta de `/health` que no traiga `X-Cluster-Secret` correcta. Los nombres de ambas cabeceras son provisionales y deben confirmarse con el líder del gateway.
+Si `GATEWAY_SECRET` está definida, ambos procesos rechazan con 401 cualquier petición distinta de `/health` y del preflight CORS que no traiga `X-Cluster-Secret` correcta. En despliegue debe definirse; sin ella la comprobación queda desactivada solo para desarrollo local. El MID envía `RUTAS_TOKEN` y `REPUTACION_TOKEN` como `Authorization: Bearer` cuando están configurados, para que el gateway aplique `rutas:leer` y `perfiles:leer`. Los nombres de las cabeceras y los scopes son provisionales y deben confirmarse con el líder del gateway.
 
 ## API MID de rutas
 
@@ -100,15 +106,20 @@ Si `GATEWAY_SECRET` está definida, ambos procesos rechazan con 401 cualquier pe
 | `GET /rutas/compatibles` | Rutas `abiertas` con cupos, salida en la ventana y trazado a menos de `RADIO_M` del origen y del destino, en el sentido correcto. Devuelve distancias, puntaje, `puntajeConductor` e insignia, ordenados. |
 | `GET /conductores/{id}/panel` | Puntaje e insignia del conductor y sus rutas con `ocupados = cuposTotales - cuposDisponibles`. Perfil inexistente: 404. Sin rutas: 200 con lista vacía. |
 
-Ejemplo de búsqueda:
+Ejemplo de búsqueda con la semilla recién cargada:
 
 ```bash
-curl 'http://127.0.0.1:8082/rutas/compatibles?origenLat=4.6486&origenLng=-74.0645&destinoLat=4.7012&destinoLng=-74.0415&desde=2030-01-15T06:00:00Z&hasta=2030-01-15T09:00:00Z'
+go run ./cmd/seed
+# La salida incluye una URL como:
+# http://127.0.0.1:8082/rutas/compatibles?origenLat=4.6486&origenLng=-74.0645&destinoLat=4.7012&destinoLng=-74.0415&desde=...&hasta=...
+curl '<URL que imprimió la semilla>'
 ```
+
+No copies una ventana fija de los ejemplos del contrato: las salidas de la semilla son relativas al día de ejecución. Los ejemplos con fechas de 2030 del YAML sirven para publicar rutas nuevas, no para consultar la semilla.
 
 El orden usa `(distanciaOrigenM + distanciaDestinoM) / 100 - puntajeConductor * 2` ascendente y desempata por `id`. Se excluyen los conductores `en_observacion`; un 404 de reputación omite al conductor y un timeout o 5xx devuelve 503 `dependencia_no_disponible` en lugar de un ranking incompleto. Sin candidatos no se consulta reputación.
 
-El panel y la búsqueda necesitan que el CRUD esté arriba y que `REPUTACION_URL` responda con `{ "puntaje": 0..5, "insignia": "nuevo|confiable|regular|en_observacion" }`. Para desarrollo puede usarse un doble HTTP; las pruebas de integración levantan uno.
+El panel y la búsqueda necesitan que el CRUD esté arriba y que `REPUTACION_URL` responda con `{ "puntaje": 0..5, "insignia": "nuevo|confiable|regular|en_observacion" }`. Para desarrollo puede usarse un doble HTTP; las pruebas de integración levantan uno. El MID recorre como máximo 100 páginas de 100 rutas por consulta; si el CRUD devuelve una página inválida, vacía con datos pendientes o se supera ese tope, responde 503 en lugar de un resultado parcial.
 
 ## Documentación OpenAPI ejecutable
 
@@ -148,14 +159,14 @@ go build ./...
 docker compose config --quiet
 ```
 
-GitHub Actions levanta MongoDB 8, comprueba el formato de `cmd`, `internal` y `test`, ejecuta `go vet`, las pruebas con detector de carreras, la compilación y valida Compose. Las pruebas de integración usan bases temporales y verifican la competencia por el último cupo, la edición concurrente, el cierre con cupos comprometidos, la búsqueda con reputación simulada y el panel. En Windows, `-race` requiere CGO y un compilador C; el pipeline lo ejecuta en Linux.
+GitHub Actions levanta MongoDB 8, comprueba el formato de `cmd`, `internal` y `test`, valida los dos contratos con `swagger-cli`, ejecuta `go vet`, las pruebas con detector de carreras, la compilación y valida Compose. Las pruebas de integración usan bases temporales y verifican la competencia por el último cupo, la edición concurrente, el cierre con cupos comprometidos, la búsqueda con reputación simulada y el panel. En Windows, `-race` requiere CGO y un compilador C; el pipeline lo ejecuta en Linux.
 
 ## Acuerdos pendientes con el clúster
 
-- **Gateway:** nombres definitivos de `X-Usuario-Id` y `X-Cluster-Secret`, emisión de tokens y scopes `rutas:leer`, `rutas:escribir` y `perfiles:leer`. Hoy la identidad y el secreto son provisionales y la comprobación del secreto está desactivada si `GATEWAY_SECRET` queda vacía.
+- **Gateway:** nombres definitivos de `X-Usuario-Id` y `X-Cluster-Secret`, emisión de tokens y scopes `rutas:leer`, `rutas:escribir` y `perfiles:leer`. Hoy la identidad y el secreto son provisionales, la comprobación del secreto está desactivada si `GATEWAY_SECRET` queda vacía y los tokens de servicio son opcionales.
 - **Reservas:** clave de idempotencia para `PATCH /rutas/{id}/cupos`, responsable de reconciliar devoluciones fallidas y confirmación de que `cuposTotales - cuposDisponibles` representa exactamente los cupos comprometidos. El cierre bloquea cupos ya descontados, no reservas pendientes sin descuento.
 - **Pasajeros y reputación:** confirmar que `puntaje` e `insignia` son obligatorios, que los campos adicionales son opcionales y que el 404 significa perfil inexistente. Falta la integración real con el gateway.
-- **Semilla:** confirmar los ids `ruta-0001..ruta-0015` y `usr-01..usr-12` con B y C.
+- **Semilla:** confirmar los ids `ruta-0001..ruta-0015` y `usr-01..usr-12` con B y C. La semilla reinicia fechas, cupos y estados de las rutas semilla; no debe ejecutarse con reservas activas.
 - **API de tercero:** la generación vial con openrouteservice y su operación interna siguen pendientes; el MID todavía no consume ese proveedor.
 
 - [Requisitos del clúster](X1.cluster-subete.md) y [propuesta y secuencias](PROPUESTA-GRUPO-A.md).

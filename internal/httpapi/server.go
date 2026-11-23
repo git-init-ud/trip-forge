@@ -20,6 +20,8 @@ func salud(service string) http.HandlerFunc {
 	}
 }
 
+// router arma un router mínimo de salud para las pruebas del paquete. Los
+// procesos usan RouterRutas y RouterMID.
 func router(service string) http.Handler {
 	r := chi.NewRouter()
 	// requestID va antes de CORS para que las respuestas reales y el preflight
@@ -35,19 +37,6 @@ func direccion(defecto string) string {
 		return addr
 	}
 	return defecto
-}
-
-// Serve mantiene el arranque simple que usan los procesos sin persistencia,
-// como el MID de rutas.
-func Serve(service, defaultAddr string) error {
-	addr := direccion(defaultAddr)
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           router(service),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	log.Printf("%s listening on %s", service, addr)
-	return server.ListenAndServe()
 }
 
 // ServirRutas arranca el CRUD de rutas con su almacén y se apaga de forma

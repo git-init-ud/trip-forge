@@ -91,6 +91,10 @@ func TestCORSRechazaPreflightDeOrigenDesconocido(t *testing.T) {
 	if origen := grabador.Header().Get("Access-Control-Allow-Origin"); origen != "" {
 		t.Fatalf("Access-Control-Allow-Origin = %q, se esperaba vacío", origen)
 	}
+	respuesta, _ := decodificarError(t, grabador)
+	if respuesta.Codigo != codigoNoAutorizado || respuesta.Mensaje == "" {
+		t.Fatalf("el 403 de CORS debe usar el formato común: %+v", respuesta)
+	}
 }
 
 func TestCORSSolicitudDeOrigenDesconocidoNoSeBloquea(t *testing.T) {
