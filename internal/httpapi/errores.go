@@ -15,6 +15,8 @@ const (
 	codigoSinCupos          = "sin_cupos"
 	codigoCuposExcedidos    = "cupos_excedidos"
 	codigoRutaCerrada       = "ruta_cerrada"
+	codigoNoAutorizado      = "no_autorizado"
+	codigoReservasActivas   = "reservas_activas"
 	codigoErrorInterno      = "error_interno"
 )
 
@@ -91,6 +93,18 @@ func mapearError(err error, rutaID string) (int, errorRespuesta) {
 		return http.StatusConflict, errorRespuesta{
 			Codigo:  codigoRutaCerrada,
 			Mensaje: "La ruta está cerrada",
+			Detalle: detalleRuta,
+		}
+	case errors.Is(err, rutas.ErrReservasActivas):
+		return http.StatusConflict, errorRespuesta{
+			Codigo:  codigoReservasActivas,
+			Mensaje: "La ruta tiene cupos comprometidos por reservas",
+			Detalle: detalleRuta,
+		}
+	case errors.Is(err, rutas.ErrNoAutorizado):
+		return http.StatusForbidden, errorRespuesta{
+			Codigo:  codigoNoAutorizado,
+			Mensaje: "La identidad autenticada no es la propietaria de la ruta",
 			Detalle: detalleRuta,
 		}
 	default:

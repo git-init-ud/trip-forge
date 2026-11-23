@@ -9,8 +9,14 @@ var (
 	ErrSinCupos = errors.New("la ruta no tiene cupos disponibles")
 	// ErrCuposExcedidos indica que una devolución superaría los cupos totales.
 	ErrCuposExcedidos = errors.New("la ruta no puede superar los cupos totales")
-	// ErrRutaCerrada indica que se intentó devolver cupos a una ruta cerrada.
+	// ErrRutaCerrada indica que se intentó modificar una ruta cerrada.
 	ErrRutaCerrada = errors.New("la ruta está cerrada")
+	// ErrNoAutorizado indica que la identidad autenticada no es el propietario
+	// de la ruta o que la solicitud no trae identidad.
+	ErrNoAutorizado = errors.New("la identidad no puede operar esta ruta")
+	// ErrReservasActivas indica que una edición o un cierre dejaría cupos
+	// comprometidos sin una ruta que los sostenga.
+	ErrReservasActivas = errors.New("la ruta tiene cupos comprometidos")
 )
 
 // ErrorValidacion describe una entrada inválida y el campo que la origina.

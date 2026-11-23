@@ -19,9 +19,10 @@ const (
 	// metodosCORS incluye los métodos que publicará el contrato completo del
 	// CRUD; hoy solo GET, POST y PATCH tienen ruta registrada.
 	metodosCORS = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-	// Cuando el gateway acuerde su cabecera de confianza, agrégala a esta lista
-	// y prueba el preflight de las operaciones que la envíen.
-	cabecerasCORS = "Content-Type, X-Request-Id, Authorization"
+	// X-Usuario-Id y X-Cluster-Secret son provisionales: el visor las envía
+	// mientras el gateway no esté integrado. Cuando el clúster acuerde los
+	// nombres definitivos, actualiza esta lista y el preflight.
+	cabecerasCORS = "Content-Type, X-Request-Id, Authorization, X-Usuario-Id, X-Cluster-Secret"
 )
 
 // cors permite que Swagger UI, servido por cmd/docs en otro puerto, ejecute las
