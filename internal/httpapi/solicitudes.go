@@ -150,6 +150,9 @@ func leerFiltroListado(r *http.Request) (rutas.FiltroListado, error) {
 	if err != nil {
 		return rutas.FiltroListado{}, err
 	}
+	if consulta.Has("estado") && filtro.Estado == "" {
+		return rutas.FiltroListado{}, &rutas.ErrorValidacion{Campo: "estado", Motivo: "no puede estar vacío"}
+	}
 	filtro.Desde = desde
 	filtro.Hasta = hasta
 
@@ -172,6 +175,9 @@ func leerFiltroListado(r *http.Request) (rutas.FiltroListado, error) {
 }
 
 func leerInstanteDeConsulta(consulta url.Values, campo string) (time.Time, error) {
+	if consulta.Has(campo) && strings.TrimSpace(consulta.Get(campo)) == "" {
+		return time.Time{}, &rutas.ErrorValidacion{Campo: campo, Motivo: "no puede estar vacío"}
+	}
 	crudo := strings.TrimSpace(consulta.Get(campo))
 	if crudo == "" {
 		return time.Time{}, nil
@@ -209,12 +215,22 @@ func decodificar(w http.ResponseWriter, r *http.Request, destino any) error {
 		return errorDeDecodificacion(err)
 	}
 	if err := decodificador.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		if err == nil {
+			// Un segundo valor JSON válido (por ejemplo `{...}{}` o
+			// `{...} null`) decodifica sin error: el cuerpo debe contener un
+			// único objeto.
+			return &rutas.ErrorValidacion{Campo: "cuerpo", Motivo: "contiene datos después del objeto"}
+		}
 		return errorDeDecodificacion(err)
 	}
 	return nil
 }
 
 func errorDeDecodificacion(err error) error {
+	if err == nil {
+		// Defensa: un fallo sin detalle no debe convertirse en pánico.
+		return &rutas.ErrorValidacion{Campo: "cuerpo", Motivo: "no es un JSON válido"}
+	}
 	var excedido *http.MaxBytesError
 	if errors.As(err, &excedido) {
 		return &rutas.ErrorValidacion{Campo: "cuerpo", Motivo: "supera el límite de 1 MB"}

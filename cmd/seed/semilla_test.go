@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
@@ -158,4 +159,54 @@ func assertarRutaLejosDelOrigen(t *testing.T, semilla []rutas.Ruta) {
 
 func mismaCoordenada(a, b []float64) bool {
 	return len(a) == 2 && len(b) == 2 && a[0] == b[0] && a[1] == b[1]
+}
+
+func TestConsultaDemo(t *testing.T) {
+	semilla := construirSemilla(fechaSemilla())
+	consulta := consultaDemo(semilla)
+
+	destino, err := url.Parse(consulta)
+	if err != nil {
+		t.Fatalf("la consulta no es una URL válida: %v", err)
+	}
+	if destino.Path != "/rutas/compatibles" {
+		t.Fatalf("ruta = %q", destino.Path)
+	}
+	valores := destino.Query()
+	coordenadas := map[string]string{
+		"origenLat":  "4.6486",
+		"origenLng":  "-74.0645",
+		"destinoLat": "4.7012",
+		"destinoLng": "-74.0415",
+	}
+	for nombre, esperado := range coordenadas {
+		if obtenido := valores.Get(nombre); obtenido != esperado {
+			t.Fatalf("%s = %q, se esperaba %q", nombre, obtenido, esperado)
+		}
+	}
+
+	desde, err := time.Parse(time.RFC3339, valores.Get("desde"))
+	if err != nil {
+		t.Fatalf("desde = %q: %v", valores.Get("desde"), err)
+	}
+	hasta, err := time.Parse(time.RFC3339, valores.Get("hasta"))
+	if err != nil {
+		t.Fatalf("hasta = %q: %v", valores.Get("hasta"), err)
+	}
+	if desde.After(hasta) {
+		t.Fatalf("ventana invertida: %v - %v", desde, hasta)
+	}
+
+	candidatas := 0
+	for _, ruta := range semilla {
+		if ruta.Estado != rutas.Abierta {
+			continue
+		}
+		if !ruta.Salida.Before(desde) && !ruta.Salida.After(hasta) {
+			candidatas++
+		}
+	}
+	if candidatas == 0 {
+		t.Fatalf("la ventana %v - %v no incluye ninguna salida de la semilla", desde, hasta)
+	}
 }

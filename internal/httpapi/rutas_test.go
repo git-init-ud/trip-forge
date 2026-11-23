@@ -175,6 +175,20 @@ func solicitarConUsuario(t *testing.T, manejador http.Handler, metodo, ruta stri
 	return grabador
 }
 
+// solicitarCrudo envía un cuerpo tal cual, sin serializarlo, para probar
+// cuerpos con datos después del objeto o cabeceras adicionales.
+func solicitarCrudo(t *testing.T, manejador http.Handler, metodo, ruta, cuerpo string, cabeceras map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	peticion := httptest.NewRequest(metodo, ruta, strings.NewReader(cuerpo))
+	peticion.Header.Set("Content-Type", "application/json")
+	for nombre, valor := range cabeceras {
+		peticion.Header.Set(nombre, valor)
+	}
+	grabador := httptest.NewRecorder()
+	manejador.ServeHTTP(grabador, peticion)
+	return grabador
+}
+
 func decodificarError(t *testing.T, grabador *httptest.ResponseRecorder) (errorRespuesta, map[string]any) {
 	t.Helper()
 	var crudo map[string]json.RawMessage
@@ -757,6 +771,9 @@ func TestListarRutasRechazaConsultaInvalida(t *testing.T) {
 		{"hasta con formato inválido", "hasta=2030-01-15", "hasta"},
 		{"ventana invertida", "desde=2030-01-16T00:00:00Z&hasta=2030-01-15T00:00:00Z", "desde"},
 		{"conductor vacío", "conductorId=%20", "conductorId"},
+		{"estado vacío", "estado=", "estado"},
+		{"desde vacío", "desde=", "desde"},
+		{"hasta vacío", "hasta=", "hasta"},
 	}
 	for _, caso := range casos {
 		t.Run(caso.nombre, func(t *testing.T) {
@@ -1090,4 +1107,97 @@ func TestSecretoGatewayProtegeElRouter(t *testing.T) {
 	if grabador.Code != http.StatusOK {
 		t.Fatalf("health sin secreto: estado = %d", grabador.Code)
 	}
+}
+
+func TestDecodificarRechazaDatosDespuesDelObjeto(t *testing.T) {
+	creacion := mustJSON(t, cuerpoCreacion())
+	actualizacion := mustJSON(t, cuerpoActualizacion())
+	casos := []struct {
+		nombre  string
+		metodo  string
+		ruta    string
+		cuerpo  string
+		usuario string
+	}{
+		{"POST objeto", http.MethodPost, "/rutas", creacion + "{}", ""},
+		{"POST null", http.MethodPost, "/rutas", creacion + " null", ""},
+		{"PUT objeto", http.MethodPut, "/rutas/ruta-1a2b3c4d5e6f7a8b", actualizacion + "{}", "usr-12"},
+		{"PUT null", http.MethodPut, "/rutas/ruta-1a2b3c4d5e6f7a8b", actualizacion + " null", "usr-12"},
+		{"PATCH objeto", http.MethodPatch, "/rutas/ruta-1a2b3c4d5e6f7a8b/cupos", `{"delta":-1}{}`, ""},
+		{"PATCH null", http.MethodPatch, "/rutas/ruta-1a2b3c4d5e6f7a8b/cupos", `{"delta":-1} null`, ""},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			almacen := &almacenFalso{}
+			cabeceras := map[string]string{}
+			if caso.usuario != "" {
+				cabeceras[cabeceraUsuario] = caso.usuario
+			}
+			grabador := solicitarCrudo(t, RouterRutas(almacen), caso.metodo, caso.ruta, caso.cuerpo, cabeceras)
+			if grabador.Code != http.StatusBadRequest {
+				t.Fatalf("estado = %d, se esperaba 400: %s", grabador.Code, grabador.Body.String())
+			}
+			respuesta, detalle := decodificarError(t, grabador)
+			if respuesta.Codigo != codigoSolicitudInvalida {
+				t.Fatalf("codigo = %q", respuesta.Codigo)
+			}
+			if campo, _ := detalle["campo"].(string); campo != "cuerpo" {
+				t.Fatalf("detalle.campo = %q, se esperaba cuerpo (%v)", campo, detalle)
+			}
+			if motivo, _ := detalle["motivo"].(string); !strings.Contains(motivo, "después del objeto") {
+				t.Fatalf("detalle.motivo = %q", motivo)
+			}
+		})
+	}
+}
+
+func TestCrearRutaConGatewayActivo(t *testing.T) {
+	t.Setenv("GATEWAY_SECRET", "secreto-de-prueba")
+	cuerpo := mustJSON(t, cuerpoCreacion())
+
+	casos := []struct {
+		nombre  string
+		usuario string
+		estado  int
+		codigo  string
+	}{
+		{"sin identidad", "", http.StatusForbidden, codigoNoAutorizado},
+		{"identidad propia", "usr-12", http.StatusCreated, ""},
+		{"identidad ajena", "usr-01", http.StatusForbidden, codigoNoAutorizado},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			llamadas := 0
+			almacen := &almacenFalso{crear: func(context.Context, rutas.Ruta) error {
+				llamadas++
+				return nil
+			}}
+			cabeceras := map[string]string{cabeceraSecreto: "secreto-de-prueba"}
+			if caso.usuario != "" {
+				cabeceras[cabeceraUsuario] = caso.usuario
+			}
+			grabador := solicitarCrudo(t, RouterRutas(almacen), http.MethodPost, "/rutas", cuerpo, cabeceras)
+			if grabador.Code != caso.estado {
+				t.Fatalf("estado = %d, se esperaba %d: %s", grabador.Code, caso.estado, grabador.Body.String())
+			}
+			if caso.codigo != "" {
+				respuesta, _ := decodificarError(t, grabador)
+				if respuesta.Codigo != caso.codigo {
+					t.Fatalf("codigo = %q, se esperaba %q", respuesta.Codigo, caso.codigo)
+				}
+				if llamadas != 0 {
+					t.Fatal("no se debe guardar la ruta sin una identidad válida")
+				}
+			}
+		})
+	}
+
+	t.Run("sin secreto", func(t *testing.T) {
+		almacen := &almacenFalso{}
+		grabador := solicitarCrudo(t, RouterRutas(almacen), http.MethodPost, "/rutas", cuerpo,
+			map[string]string{cabeceraUsuario: "usr-12"})
+		if grabador.Code != http.StatusUnauthorized {
+			t.Fatalf("estado = %d, se esperaba 401: %s", grabador.Code, grabador.Body.String())
+		}
+	})
 }

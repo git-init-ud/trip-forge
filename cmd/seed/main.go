@@ -1,8 +1,12 @@
 // Command seed carga las rutas de demostración en MongoDB.
 //
 // Es idempotente por identificador: reemplaza ruta-0001..ruta-0015 y no toca
-// otras rutas de la base. Lee MONGODB_URI y MONGODB_DB, abre la conexión con
-// mongorutas.Abrir y deja los índices listos antes de escribir.
+// otras rutas de la base. Antes de escribir compara cada ruta existente con el
+// estado esperado; si alguna difiere por una reserva, edición o cierre, aborta
+// sin cambiar nada salvo que SEED_FORCE=1. Las rutas con el estado intacto se
+// refrescan sin exigir la variable, porque solo se recalcula su salida. Lee
+// MONGODB_URI, MONGODB_DB y SEED_FORCE, abre la conexión con mongorutas.Abrir y
+// deja los índices listos antes de escribir.
 package main
 
 import (
@@ -49,12 +53,13 @@ func ejecutar() error {
 	}
 
 	semilla := construirSemilla(time.Now())
-	for _, ruta := range semilla {
-		if err := repositorio.Reemplazar(ctx, ruta); err != nil {
-			return err
-		}
+	forzar := strings.TrimSpace(os.Getenv("SEED_FORCE")) == "1"
+	if err := sembrar(ctx, repositorio, semilla, forzar); err != nil {
+		return err
 	}
 	imprimirResumen(base, semilla)
+	fmt.Printf("seed: consulta de demostración:\n  curl '%s%s'\n",
+		variable("MID_URL", "http://127.0.0.1:8082"), consultaDemo(semilla))
 	return nil
 }
 

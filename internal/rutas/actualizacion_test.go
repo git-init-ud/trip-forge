@@ -194,7 +194,7 @@ func TestValidarCierre(t *testing.T) {
 			ruta := rutaConComprometidos(t, 3, 1)
 			ruta.Estado = Cerrada
 			return ruta
-		}(), nil},
+		}(), ErrReservasActivas},
 	}
 	for _, caso := range casos {
 		t.Run(caso.nombre, func(t *testing.T) {
@@ -231,7 +231,6 @@ func TestValidarFiltroListado(t *testing.T) {
 		{"limit excedido", func(f *FiltroListado) { f.Limit = LimitMaximo + 1 }, "limit"},
 		{"offset negativo", func(f *FiltroListado) { f.Offset = -1 }, "offset"},
 		{"ventana invertida", func(f *FiltroListado) { f.Hasta = f.Desde.Add(-time.Second) }, "desde"},
-		{"conductor vacío", func(f *FiltroListado) { f.ConductorID = "   " }, "conductorId"},
 	}
 
 	for _, caso := range casos {

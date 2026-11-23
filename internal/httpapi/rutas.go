@@ -94,6 +94,14 @@ func listarRutas(almacen AlmacenRutas) http.HandlerFunc {
 
 func crearRuta(almacen AlmacenRutas) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		identidad := usuarioAutenticado(r)
+		// Con el gateway activo la identidad es obligatoria antes de leer el
+		// cuerpo. Sin GATEWAY_SECRET se conserva la compatibilidad local: la
+		// cabecera es opcional, pero si llega debe ser la del conductor.
+		if gatewayActivo() && identidad == "" {
+			responderError(w, r, rutas.ErrNoAutorizado, "")
+			return
+		}
 		var solicitud crearRutaSolicitud
 		if err := decodificar(w, r, &solicitud); err != nil {
 			responderError(w, r, err, "")
@@ -104,9 +112,7 @@ func crearRuta(almacen AlmacenRutas) http.HandlerFunc {
 			responderError(w, r, err, "")
 			return
 		}
-		// Mientras el gateway no inyecte la identidad, la cabecera es opcional
-		// para conservar el uso local; si llega, debe ser la del conductor.
-		if identidad := usuarioAutenticado(r); identidad != "" && identidad != strings.TrimSpace(entrada.ConductorID) {
+		if identidad != "" && identidad != strings.TrimSpace(entrada.ConductorID) {
 			responderError(w, r, rutas.ErrNoAutorizado, "")
 			return
 		}

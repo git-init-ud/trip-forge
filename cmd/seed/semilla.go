@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/git-init-ud/trip-forge/internal/rutas"
@@ -149,4 +151,52 @@ func zonaBogota() *time.Location {
 		return time.FixedZone("COT", -5*60*60)
 	}
 	return zona
+}
+
+// consultaDemo construye la URL relativa de GET /rutas/compatibles para el
+// corredor Chapinero → Universidad. La ventana usa la primera y la última
+// salida de las rutas abiertas de la semilla, de modo que la búsqueda conserve
+// candidatas.
+func consultaDemo(semilla []rutas.Ruta) string {
+	desde, hasta := ventanaDemo(semilla)
+	valores := url.Values{}
+	valores.Set("origenLat", formatoCoordenada(puntoChapinero[1]))
+	valores.Set("origenLng", formatoCoordenada(puntoChapinero[0]))
+	valores.Set("destinoLat", formatoCoordenada(puntoUniversidad[1]))
+	valores.Set("destinoLng", formatoCoordenada(puntoUniversidad[0]))
+	valores.Set("desde", desde.UTC().Format(time.RFC3339))
+	valores.Set("hasta", hasta.UTC().Format(time.RFC3339))
+	return "/rutas/compatibles?" + valores.Encode()
+}
+
+// ventanaDemo prefiere las rutas abiertas. Si la semilla no tuviera ninguna,
+// cae a todas las rutas para no producir una ventana vacía.
+func ventanaDemo(semilla []rutas.Ruta) (time.Time, time.Time) {
+	desde, hasta := ventanaDeSalidas(semilla, func(ruta rutas.Ruta) bool {
+		return ruta.Estado == rutas.Abierta
+	})
+	if desde.IsZero() {
+		desde, hasta = ventanaDeSalidas(semilla, func(rutas.Ruta) bool { return true })
+	}
+	return desde, hasta
+}
+
+func ventanaDeSalidas(semilla []rutas.Ruta, incluir func(rutas.Ruta) bool) (time.Time, time.Time) {
+	var desde, hasta time.Time
+	for _, ruta := range semilla {
+		if !incluir(ruta) {
+			continue
+		}
+		if desde.IsZero() || ruta.Salida.Before(desde) {
+			desde = ruta.Salida
+		}
+		if hasta.IsZero() || ruta.Salida.After(hasta) {
+			hasta = ruta.Salida
+		}
+	}
+	return desde, hasta
+}
+
+func formatoCoordenada(valor float64) string {
+	return strconv.FormatFloat(valor, 'f', -1, 64)
 }

@@ -170,12 +170,18 @@ func TestConflictoDeCierre(t *testing.T) {
 		t.Fatalf("cupos comprometidos: %v", err)
 	}
 
-	cerrada := comprometida
+	cerradaConComprometidos := comprometida
+	cerradaConComprometidos.Estado = rutas.Cerrada
+	if err := conflictoDeCierre(cerradaConComprometidos, "usr-12"); !errors.Is(err, rutas.ErrReservasActivas) {
+		t.Fatalf("una ruta cerrada con comprometidos debe rechazarse: %v", err)
+	}
+	if err := conflictoDeCierre(cerradaConComprometidos, "usr-01"); !errors.Is(err, rutas.ErrNoAutorizado) {
+		t.Fatalf("una ruta cerrada ajena no debe revelarse: %v", err)
+	}
+
+	cerrada := actual
 	cerrada.Estado = rutas.Cerrada
 	if err := conflictoDeCierre(cerrada, "usr-12"); err != nil {
 		t.Fatalf("cierre idempotente: %v", err)
-	}
-	if err := conflictoDeCierre(cerrada, "usr-01"); !errors.Is(err, rutas.ErrNoAutorizado) {
-		t.Fatalf("una ruta cerrada ajena no debe revelarse: %v", err)
 	}
 }

@@ -38,11 +38,10 @@ func (f FiltroListado) Normalizar() FiltroListado {
 	return f
 }
 
-// Validar comprueba los filtros y los límites de paginación del contrato.
+// Validar comprueba los filtros y los límites de paginación del contrato. El
+// transporte rechaza antes un conductorId presente pero vacío, así que aquí
+// solo se validan valores que pueden llegar al repositorio.
 func (f FiltroListado) Validar() error {
-	if f.ConductorID != "" && strings.TrimSpace(f.ConductorID) == "" {
-		return campoInvalido("conductorId", "no puede estar vacío")
-	}
 	switch f.Estado {
 	case "", Abierta, Llena, Cerrada:
 	default:

@@ -25,6 +25,13 @@ func usuarioAutenticado(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get(cabeceraUsuario))
 }
 
+// gatewayActivo indica si el proceso exige la cabecera secreta del gateway. En
+// ese modo las operaciones de publicación también exigen identidad, porque el
+// gateway ya está inyectándola y el cuerpo no debe decidir por ella.
+func gatewayActivo() bool {
+	return strings.TrimSpace(os.Getenv("GATEWAY_SECRET")) != ""
+}
+
 // secretoGateway exige la cabecera secreta del gateway cuando GATEWAY_SECRET
 // está definida. Sin la variable la comprobación queda desactivada para no
 // romper el desarrollo local mientras el clúster acuerda el valor. /health y

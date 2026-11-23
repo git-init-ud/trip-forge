@@ -110,6 +110,9 @@ func TestCRUDListadoFiltrosYPaginacion(t *testing.T) {
 		{"ventana invertida", "desde=2030-01-16T00:00:00Z&hasta=2030-01-15T00:00:00Z", "desde"},
 		{"desde inválido", "desde=ayer", "desde"},
 		{"conductor vacío", "conductorId=%20", "conductorId"},
+		{"estado vacío", "estado=", "estado"},
+		{"desde vacío", "desde=", "desde"},
+		{"hasta vacío", "hasta=", "hasta"},
 	}
 	for _, caso := range casos {
 		t.Run(caso.nombre, func(t *testing.T) {

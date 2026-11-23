@@ -1,13 +1,16 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/git-init-ud/trip-forge/internal/mongorutas"
 	"github.com/git-init-ud/trip-forge/internal/rutas"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestCRUDEdicionConservaComprometidos(t *testing.T) {
@@ -297,5 +300,38 @@ func TestCRUDConcurrenciaDescuentoYEdicion(t *testing.T) {
 	}
 	if final := ambiente.leerDocumento(t, ruta.ID); final.CuposDisponibles < 0 {
 		t.Fatalf("cupos negativos: %+v", final)
+	}
+}
+
+func TestCRUDCierreRechazaRutaCerradaConComprometidos(t *testing.T) {
+	ambiente := crudAmbiente(t)
+	base := time.Now().UTC().Truncate(time.Second).Add(24 * time.Hour)
+
+	ruta := crudCrear(t, ambiente, "usr-12", 2, base)
+	if respuesta := ambiente.ajustar(t, ruta.ID, -1); respuesta.estado != http.StatusOK {
+		t.Fatalf("PATCH -1 = %d: %s", respuesta.estado, respuesta.cuerpo)
+	}
+
+	// Documento inconsistente: cerrado por fuera del API con un cupo todavía
+	// comprometido. El cierre repetido no debe devolver 204.
+	ctx, cancelar := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelar()
+	_, err := ambiente.mongo.Database(ambiente.base).Collection(mongorutas.ColeccionRutas).
+		UpdateOne(ctx, bson.D{{Key: "_id", Value: ruta.ID}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "estado", Value: "cerrada"}}}})
+	if err != nil {
+		t.Fatalf("preparar el documento inconsistente: %v", err)
+	}
+
+	cierre := crudCerrar(t, ambiente, ruta.ID, "usr-12")
+	if cierre.estado != http.StatusConflict {
+		t.Fatalf("cierre sobre documento inconsistente = %d: %s", cierre.estado, cierre.cuerpo)
+	}
+	if codigo := decodificarError(t, cierre).Codigo; codigo != "reservas_activas" {
+		t.Fatalf("codigo = %q", codigo)
+	}
+	documento := ambiente.leerDocumento(t, ruta.ID)
+	if documento.Estado != "cerrada" || documento.CuposDisponibles != 1 {
+		t.Fatalf("documento inesperado: %+v", documento)
 	}
 }
